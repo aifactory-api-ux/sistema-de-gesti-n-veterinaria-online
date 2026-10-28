@@ -1,0 +1,334 @@
+{
+  "enums": {
+    "HealthResponse.status": [
+      "ok"
+    ],
+    "RolUsuario": [
+      "client",
+      "vet"
+    ],
+    "EspecieMascota": [
+      "dog",
+      "cat",
+      "other"
+    ]
+  },
+  "exports": {
+    "app/main.py": [
+      "app",
+      "lifespan"
+    ],
+    "app/routers/__init__.py": [],
+    "app/routers/health.py": [
+      "router",
+      "HealthResponse",
+      "health"
+    ],
+    "app/routers/auth.py": [
+      "router",
+      "registrar_usuario",
+      "iniciar_sesion"
+    ],
+    "app/routers/vets.py": [
+      "router",
+      "listar_veterinarios"
+    ],
+    "app/routers/pets.py": [
+      "router",
+      "registrar_mascota",
+      "listar_mascotas"
+    ],
+    "app/routers/appointments.py": [
+      "router",
+      "agendar_turno",
+      "listar_turnos",
+      "cancelar_turno"
+    ],
+    "app/services/scheduling.py": [
+      "SLOT_MINUTES",
+      "OPEN_HOUR",
+      "OPEN_MINUTE",
+      "LAST_START_MINUTE",
+      "DIAS_DE_AGENDA",
+      "ERROR_DIA_FUERA_DE_AGENDA",
+      "ERROR_FUERA_DE_HORARIO",
+      "ERROR_MINUTOS_NO_ADMITIDOS",
+      "ERROR_INSTANTE_PASADO",
+      "normalizar_utc",
+      "slot_end",
+      "validate_slot",
+      "overlaps"
+    ],
+    "app/security.py": [
+      "hashador",
+      "CLAIMS_REQUERIDOS",
+      "hashear_password",
+      "verificar_password",
+      "emitir_token",
+      "decodificar_token"
+    ],
+    "app/schemas.py": [
+      "RolUsuario",
+      "EspecieMascota",
+      "normalizar_email",
+      "validar_nacimiento_no_futuro",
+      "EmailNormalizado",
+      "NacimientoNoFuturo",
+      "NombreMascota",
+      "UserCreate",
+      "UserLogin",
+      "UserPublic",
+      "Token",
+      "VetPublic",
+      "PetCreate",
+      "PetPublic",
+      "InicioEnUtc",
+      "AppointmentCreate",
+      "AppointmentPublic"
+    ],
+    "app/errors.py": [
+      "MENSAJE_NO_AUTENTICADO",
+      "MENSAJE_SIN_PERMISOS",
+      "MENSAJE_EMAIL_DUPLICADO",
+      "MENSAJE_CREDENCIALES",
+      "CABECERA_BEARER",
+      "unauthorized",
+      "forbidden",
+      "conflict",
+      "not_found",
+      "CODIGO_UNPROCESSABLE",
+      "unprocessable"
+    ],
+    "app/dependencies.py": [
+      "RUTAS_PUBLICAS",
+      "esquema_bearer",
+      "es_ruta_publica",
+      "AutenticacionBearerMiddleware",
+      "get_current_user",
+      "require_client",
+      "require_vet"
+    ],
+    "tests/conftest.py": [
+      "emitir_token",
+      "motor_de_pruebas",
+      "sesion_local",
+      "client",
+      "client_user",
+      "vet_user",
+      "auth_headers"
+    ],
+    "tests/test_health.py": [
+      "test_health_responde_ok_sin_token",
+      "test_health_responde_ok_con_token_valido",
+      "test_health_no_expone_datos_de_usuarios_ni_de_base_de_datos"
+    ],
+    "tests/test_security.py": [
+      "test_dos_contrasenas_iguales_producen_hashes_distintos",
+      "test_el_hash_usa_argon2_y_no_contiene_la_contrasena",
+      "test_verificar_password_acepta_la_contrasena_correcta",
+      "test_verificar_password_rechaza_una_contrasena_distinta",
+      "test_el_token_emitido_lleva_el_sub_y_el_role_esperados",
+      "test_el_token_emitido_lleva_iat_y_exp",
+      "test_un_token_firmado_con_otro_secreto_no_se_decodifica",
+      "test_un_token_expirado_no_se_decodifica",
+      "test_un_token_sin_claims_obligatorios_no_se_decodifica"
+    ],
+    "tests/test_auth.py": [
+      "test_registro_de_un_cliente_responde_201",
+      "test_registro_de_un_veterinario_responde_201",
+      "test_registro_normaliza_el_email_a_minusculas",
+      "test_registro_con_email_duplicado_responde_409",
+      "test_registro_con_contrasena_de_seis_caracteres_responde_422",
+      "test_registro_con_contrasena_de_ocho_caracteres_responde_201",
+      "test_registro_con_rol_invalido_responde_422",
+      "test_registro_sin_rol_responde_422",
+      "test_registro_guarda_el_hash_y_no_la_contrasena",
+      "test_login_valido_responde_200_con_token",
+      "test_login_con_contrasena_incorrecta_responde_401",
+      "test_login_con_email_inexistente_responde_401",
+      "test_login_no_devuelve_material_de_contrasena",
+      "test_el_token_identifica_al_usuario_y_a_su_rol",
+      "test_peticion_sin_cabecera_authorization_responde_401",
+      "test_token_con_firma_invalida_responde_401",
+      "test_token_expirado_responde_401",
+      "test_esquema_de_autorizacion_distinto_de_bearer_responde_401",
+      "test_token_valido_no_responde_401",
+      "test_get_current_user_responde_401_sin_token",
+      "test_require_client_responde_403_para_un_veterinario",
+      "test_require_client_devuelve_el_usuario_para_un_cliente"
+    ],
+    "tests/test_vets.py": [
+      "test_directorio_lista_solo_los_veterinarios",
+      "test_cada_elemento_del_directorio_solo_tiene_id_y_email",
+      "test_los_clientes_no_aparecen_en_el_directorio",
+      "test_directorio_sin_veterinarios_devuelve_arreglo_vacio",
+      "test_el_directorio_tambien_se_consulta_con_el_token_de_un_veterinario",
+      "test_directorio_sin_token_responde_401",
+      "test_directorio_con_token_invalido_responde_401",
+      "test_directorio_con_esquema_distinto_de_bearer_responde_401"
+    ],
+    "tests/test_pets.py": [
+      "test_alta_de_mascota_responde_201_con_todos_los_campos",
+      "test_la_mascota_se_guarda_con_el_cliente_autenticado_como_propietario",
+      "test_el_propietario_no_puede_elegirse_en_el_cuerpo",
+      "test_las_especies_admitidas_registran_la_mascota",
+      "test_una_especie_no_admitida_responde_422_y_no_registra",
+      "test_una_fecha_de_nacimiento_futura_responde_422_y_no_registra",
+      "test_una_fecha_de_nacimiento_igual_al_dia_actual_responde_201",
+      "test_el_veterinario_no_puede_registrar_mascotas",
+      "test_el_alta_sin_token_responde_401",
+      "test_el_alta_con_token_invalido_responde_401",
+      "test_el_listado_devuelve_solo_las_mascotas_propias",
+      "test_el_listado_de_un_cliente_sin_mascotas_devuelve_un_arreglo_vacio",
+      "test_el_listado_sin_token_responde_401",
+      "test_el_listado_con_token_invalido_responde_401",
+      "test_el_veterinario_no_ve_las_mascotas_de_los_clientes"
+    ],
+    "tests/test_scheduling.py": [
+      "test_la_duracion_del_turno_es_de_30_minutos",
+      "test_la_agenda_abre_a_las_9_y_el_ultimo_inicio_es_a_las_17_30",
+      "test_la_agenda_atiende_de_lunes_a_sabado",
+      "test_un_inicio_valido_no_devuelve_error",
+      "test_un_turno_en_domingo_se_rechaza",
+      "test_un_turno_en_sabado_se_admite",
+      "test_un_inicio_antes_de_las_9_se_rechaza",
+      "test_un_inicio_a_las_17_30_se_admite",
+      "test_un_inicio_a_las_18_se_rechaza",
+      "test_un_inicio_con_minutos_no_admitidos_se_rechaza",
+      "test_un_inicio_en_y_media_se_admite",
+      "test_un_instante_pasado_se_rechaza",
+      "test_un_instante_igual_al_actual_se_rechaza",
+      "test_el_error_de_dia_tiene_prioridad_sobre_el_de_horario",
+      "test_las_reglas_se_evaluan_en_utc",
+      "test_un_instante_sin_zona_horaria_se_interpreta_como_utc",
+      "test_normalizar_utc_convierte_un_desplazamiento_a_utc",
+      "test_el_fin_del_turno_es_30_minutos_despues_del_inicio",
+      "test_el_fin_del_turno_se_normaliza_a_utc",
+      "test_overlaps_detecta_intervalos_identicos",
+      "test_overlaps_detecta_un_solapamiento_parcial",
+      "test_overlaps_detecta_un_intervalo_contenido",
+      "test_overlaps_no_detecta_intervalos_que_solo_se_tocan",
+      "test_overlaps_no_detecta_intervalos_en_dias_distintos",
+      "test_overlaps_compara_en_utc"
+    ],
+    "tests/test_appointments.py": [
+      "test_agendar_turno_responde_201_con_todos_los_campos",
+      "test_el_turno_dura_exactamente_30_minutos",
+      "test_el_turno_se_persiste_con_la_mascota_y_el_veterinario",
+      "test_el_veterinario_no_puede_agendar_turnos",
+      "test_una_mascota_inexistente_responde_404",
+      "test_un_veterinario_inexistente_responde_404",
+      "test_un_usuario_que_no_es_veterinario_responde_404",
+      "test_una_mascota_ajena_responde_403",
+      "test_agendar_sin_token_responde_401",
+      "test_agendar_con_token_invalido_responde_401",
+      "test_un_turno_en_domingo_responde_422",
+      "test_un_turno_en_sabado_se_admite",
+      "test_un_inicio_antes_de_las_9_responde_422",
+      "test_un_inicio_a_las_17_30_se_admite",
+      "test_un_inicio_a_las_18_responde_422",
+      "test_un_inicio_con_minutos_no_admitidos_responde_422",
+      "test_un_inicio_en_y_media_se_admite",
+      "test_un_inicio_con_desplazamiento_se_normaliza_a_utc",
+      "test_un_inicio_sin_zona_horaria_se_interpreta_como_utc",
+      "test_un_inicio_que_no_es_iso_8601_responde_422",
+      "test_un_inicio_en_el_pasado_responde_422",
+      "test_un_turno_duplicado_del_mismo_cliente_responde_409",
+      "test_un_turno_duplicado_de_otro_cliente_responde_409",
+      "test_otro_horario_del_mismo_veterinario_no_entra_en_conflicto",
+      "test_el_cliente_ve_solo_los_turnos_de_sus_mascotas",
+      "test_el_veterinario_ve_solo_los_turnos_asignados",
+      "test_el_listado_de_un_cliente_sin_turnos_devuelve_un_arreglo_vacio",
+      "test_el_listado_sin_token_responde_401",
+      "test_el_listado_con_token_invalido_responde_401",
+      "test_el_dueno_de_la_mascota_puede_cancelar_el_turno",
+      "test_el_veterinario_asignado_puede_cancelar_el_turno",
+      "test_un_usuario_no_relacionado_no_puede_cancelar_el_turno",
+      "test_cancelar_un_turno_inexistente_responde_404",
+      "test_cancelar_un_turno_ya_cancelado_responde_409",
+      "test_el_horario_cancelado_queda_libre",
+      "test_cancelar_sin_token_responde_401",
+      "test_los_turnos_exigen_autenticacion"
+    ],
+    "tests/test_contenedor.py": [
+      "test_el_dockerfile_toma_el_puerto_del_entorno",
+      "test_el_dockerfile_no_incrusta_configuracion_sensible",
+      "test_compose_proporciona_la_configuracion_al_servicio_de_la_api",
+      "test_el_secreto_de_firma_llega_desde_el_entorno",
+      "test_la_api_alcanza_a_postgres_por_el_nombre_del_servicio",
+      "test_el_puerto_publicado_acompana_al_puerto_del_contenedor",
+      "test_la_comprobacion_de_salud_consulta_el_puerto_del_contenedor",
+      "test_la_imagen_se_construye_desde_la_raiz_del_repositorio",
+      "test_el_ejemplo_de_entorno_documenta_las_variables_de_la_orquestacion",
+      "test_el_archivo_de_configuracion_local_no_se_versiona_ni_se_imagen",
+      "test_el_guion_crea_el_archivo_de_configuracion_en_el_primer_arranque",
+      "test_la_aplicacion_expone_la_misma_variable_de_puerto_que_el_contenedor",
+      "test_la_imagen_de_ejecucion_no_incluye_el_entorno_de_desarrollo",
+      "test_la_imagen_de_ejecucion_solo_copia_el_codigo_de_la_aplicacion",
+      "test_la_etapa_de_ejecucion_es_la_ultima_del_dockerfile",
+      "test_la_etapa_de_ejecucion_expone_el_puerto_de_la_aplicacion",
+      "test_la_etapa_de_pruebas_incluye_las_dependencias_de_desarrollo",
+      "test_el_servicio_de_la_api_construye_la_etapa_de_ejecucion",
+      "test_el_servicio_de_pruebas_construye_la_etapa_de_pruebas",
+      "test_las_imagenes_de_la_api_y_de_las_pruebas_son_distintas"
+    ],
+    "Dockerfile": [
+      "builder",
+      "test",
+      "runtime",
+      "usuario no root vetclinic",
+      "EXPOSE 8000",
+      "ENV PORT=8000",
+      "CMD sh -c exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"
+    ],
+    ".dockerignore": [
+      "contexto de construcción"
+    ],
+    "docker-compose.yml": [
+      "db",
+      "api",
+      "tests",
+      "pgdata",
+      "healthcheck del servicio db",
+      "healthcheck del servicio api",
+      "PORT del servicio api",
+      "target runtime del servicio api",
+      "target test del servicio tests"
+    ],
+    ".env.example": [
+      "DATABASE_URL",
+      "POSTGRES_USER",
+      "POSTGRES_PASSWORD",
+      "POSTGRES_DB",
+      "JWT_SECRET",
+      "JWT_ALGORITHM",
+      "JWT_EXPIRE_MINUTES",
+      "TEST_DATABASE_URL",
+      "PORT"
+    ],
+    ".gitignore": [
+      "node_modules",
+      "dist",
+      ".env",
+      "__pycache__",
+      "*.pyc",
+      ".DS_Store"
+    ],
+    "README.md": [
+      "Ejemplos con curl",
+      "Catalogo de endpoints",
+      "Variables de entorno",
+      "Reglas de la agenda",
+      "Guion auxiliar run.sh"
+    ],
+    "run.sh": [
+      "up",
+      "down",
+      "logs",
+      "test",
+      "health",
+      "verify",
+      "help"
+    ]
+  }
+}

@@ -1,169 +1,172 @@
-"""Endpoints de la agenda de turnos.
+"""Calendario de turnos de la clínica veterinaria."""
 
-`POST /appointments` reserva un turno de 30 minutos para una mascota propia,
-`GET /appointments` lista los turnos del usuario autenticado según su rol y
-`POST /appointments/{id}/cancel` cancela un turno, ya sea el dueño de la
-mascota o el veterinario asignado.
+from datetime import datetime, time, timedelta, timezone
 
-Las comprobaciones siguen el orden documentado en el diseño: `401` (sin token)
-→ `403` (rol) → `404` (mascota inexistente) → `403` (mascota ajena) → `404`
-(veterinario inexistente) → `422` (reglas de agenda) → `409` (conflicto de
-horario) → `201`.
-"""
-
-from datetime import datetime, timezone
-from typing import Annotated
-
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import get_current_user, require_client
-from app.errors import conflict, forbidden, not_found, unprocessable
 from app.models import Appointment, Pet, User
-from app.schemas import AppointmentCreate, AppointmentPublic
-from app.services.scheduling import overlaps, slot_end, validate_slot
+from app.schemas import AppointmentCreate, AppointmentResponse
 
-router = APIRouter(tags=["turnos"])
+router = APIRouter(prefix="/appointments", tags=["appointments"])
 
-MENSAJE_MASCOTA_NO_ENCONTRADA = "No existe una mascota con ese identificador."
-MENSAJE_VETERINARIO_NO_ENCONTRADO = "No existe un veterinario con ese identificador."
-MENSAJE_MASCOTA_AJENA = "La mascota no pertenece al cliente autenticado."
-MENSAJE_TURNO_EN_CONFLICTO = "El veterinario ya tiene un turno activo en ese horario."
-MENSAJE_TURNO_NO_ENCONTRADO = "No existe un turno con ese identificador."
-MENSAJE_TURNO_YA_CANCELADO = "El turno ya está cancelado."
-MENSAJE_CANCELACION_NO_AUTORIZADA = (
-    "Solo el dueño de la mascota o el veterinario del turno pueden cancelarlo."
+# El código 422 se escribe literal para no depender del alias de Starlette,
+# que fue renombrado en versiones recientes.
+HTTP_422 = 422
+
+SLOT_DURATION = timedelta(minutes=30)
+FIRST_START = time(9, 0)
+LAST_START = time(17, 30)
+GRID_MINUTES = (0, 30)
+WORKING_WEEKDAYS = (0, 1, 2, 3, 4, 5)  # lunes a sábado
+
+INVALID_GRID = "El inicio debe caer en punto o y media, sin segundos"
+INVALID_WEEKDAY = "La clínica atiende de lunes a sábado"
+INVALID_HOUR = "El inicio debe estar entre las 09:00 y las 17:30"
+PAST_START = "La hora de inicio no puede estar en el pasado"
+UNKNOWN_PET = "La mascota no existe"
+UNKNOWN_VET = "El veterinario no existe"
+UNKNOWN_APPOINTMENT = "El turno no existe"
+PET_NOT_OWNED = "La mascota pertenece a otro cliente"
+SLOT_TAKEN = "El veterinario ya tiene un turno en ese horario"
+ALREADY_CANCELLED = "El turno ya estaba cancelado"
+NOT_ALLOWED_TO_CANCEL = (
+    "Solo el cliente dueño de la mascota o el veterinario del turno pueden cancelarlo"
 )
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Lee un instante sin zona horaria como UTC y ajusta el que sí la trae."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _calendar_violation(start_at: datetime) -> str | None:
+    """Devuelve el motivo por el que un inicio no cumple el calendario, si ocurre."""
+    if start_at.minute not in GRID_MINUTES or start_at.second or start_at.microsecond:
+        return INVALID_GRID
+    if start_at.weekday() not in WORKING_WEEKDAYS:
+        return INVALID_WEEKDAY
+    if not FIRST_START <= start_at.time() <= LAST_START:
+        return INVALID_HOUR
+    return None
+
+
+def _validate_start(start_at: datetime) -> datetime:
+    """Normaliza el inicio a UTC y aplica las reglas de calendario de la clínica."""
+    normalized = _as_utc(start_at)
+    violation = _calendar_violation(normalized)
+    if violation is not None:
+        raise HTTPException(status_code=HTTP_422, detail=violation)
+    return normalized
 
 
 @router.post(
-    "/appointments",
-    response_model=AppointmentPublic,
-    status_code=status.HTTP_201_CREATED,
-    summary="Agenda un turno para una mascota propia",
+    "", response_model=AppointmentResponse, status_code=status.HTTP_201_CREATED
 )
-def agendar_turno(
-    datos: AppointmentCreate,
-    db: Annotated[Session, Depends(get_db)],
-    usuario: Annotated[User, Depends(require_client)],
+def create_appointment(
+    payload: AppointmentCreate,
+    owner: User = Depends(require_client),
+    db: Session = Depends(get_db),
 ) -> Appointment:
-    """Reserva un turno y devuelve sus datos.
+    """Reserva un turno de 30 minutos para una mascota del cliente autenticado."""
+    start_at = _validate_start(payload.start_at)
 
-    Solo los clientes pueden agendar y solo con una mascota propia. Responde
-    `404` si la mascota o el veterinario no existen, `403` si la mascota es
-    ajena, `422` si el inicio no cumple las reglas de agenda y `409` si el
-    veterinario ya tiene un turno activo que se solapa con el solicitado.
-    """
-    mascota = db.get(Pet, datos.pet_id)
-    if mascota is None:
-        raise not_found(MENSAJE_MASCOTA_NO_ENCONTRADA)
-    if mascota.owner_id != usuario.id:
-        raise forbidden(MENSAJE_MASCOTA_AJENA)
+    pet = db.get(Pet, payload.pet_id)
+    if pet is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=UNKNOWN_PET)
+    if pet.owner_id != owner.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=PET_NOT_OWNED)
 
-    veterinario = db.get(User, datos.vet_id)
-    if veterinario is None or veterinario.role != "vet":
-        raise not_found(MENSAJE_VETERINARIO_NO_ENCONTRADO)
+    vet = db.get(User, payload.vet_id)
+    if vet is None or vet.role != "vet":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=UNKNOWN_VET)
 
-    inicio = datos.start_at
-    fin = slot_end(inicio)
-    error = validate_slot(inicio, datetime.now(timezone.utc))
-    if error is not None:
-        raise unprocessable(error)
+    if start_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=HTTP_422, detail=PAST_START)
 
-    turnos_activos = db.scalars(
+    taken = db.scalar(
         select(Appointment).where(
-            Appointment.vet_id == veterinario.id,
-            Appointment.status == "scheduled",
+            Appointment.vet_id == vet.id,
+            Appointment.start_at == start_at,
+            Appointment.status != "cancelled",
         )
-    ).all()
-    if any(
-        overlaps(inicio, fin, turno.start_at, turno.end_at)
-        for turno in turnos_activos
-    ):
-        raise conflict(MENSAJE_TURNO_EN_CONFLICTO)
+    )
+    if taken is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=SLOT_TAKEN)
 
-    turno = Appointment(
-        pet_id=mascota.id,
-        vet_id=veterinario.id,
-        start_at=inicio,
-        end_at=fin,
+    appointment = Appointment(
+        pet_id=pet.id,
+        vet_id=vet.id,
+        start_at=start_at,
+        end_at=start_at + SLOT_DURATION,
         status="scheduled",
     )
-    db.add(turno)
+    db.add(appointment)
     try:
         db.commit()
-    except IntegrityError:
-        # El índice único parcial `(vet_id, start_at) WHERE status = 'scheduled'`
-        # es la red de seguridad ante una carrera entre la comprobación previa y
-        # la inserción.
+    except IntegrityError as error:
+        # Un índice único futuro sobre (vet_id, start_at) convertiría la carrera
+        # en un conflicto de horario en lugar de un error interno.
         db.rollback()
-        raise conflict(MENSAJE_TURNO_EN_CONFLICTO) from None
-    db.refresh(turno)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=SLOT_TAKEN
+        ) from error
+    db.refresh(appointment)
+    return appointment
 
-    return turno
 
-
-@router.get(
-    "/appointments",
-    response_model=list[AppointmentPublic],
-    summary="Lista los turnos del usuario autenticado",
-)
-def listar_turnos(
-    db: Annotated[Session, Depends(get_db)],
-    usuario: Annotated[User, Depends(get_current_user)],
+@router.get("", response_model=list[AppointmentResponse])
+def list_appointments(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> list[Appointment]:
-    """Devuelve los turnos del cliente (los de sus mascotas) o los del veterinario.
-
-    La dependencia `get_current_user` exige un token Bearer válido, de modo que
-    sin cabecera o con un token inválido la API responde `401` antes de llegar
-    al manejador.
-    """
-    if usuario.role == "vet":
-        consulta = select(Appointment).where(Appointment.vet_id == usuario.id)
+    """Devuelve los turnos del cliente o del veterinario autenticado."""
+    if current_user.role == "vet":
+        statement = select(Appointment).where(Appointment.vet_id == current_user.id)
     else:
-        consulta = (
+        statement = (
             select(Appointment)
             .join(Pet, Appointment.pet_id == Pet.id)
-            .where(Pet.owner_id == usuario.id)
+            .where(Pet.owner_id == current_user.id)
+        )
+    return list(
+        db.scalars(statement.order_by(Appointment.start_at, Appointment.id))
+    )
+
+
+@router.post("/{appointment_id}/cancel", response_model=AppointmentResponse)
+def cancel_appointment(
+    appointment_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Appointment:
+    """Cancela un turno, sea el cliente dueño de la mascota o su veterinario."""
+    appointment = db.get(Appointment, appointment_id)
+    if appointment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=UNKNOWN_APPOINTMENT
         )
 
-    return list(db.scalars(consulta.order_by(Appointment.id)).all())
+    pet = db.get(Pet, appointment.pet_id)
+    is_owner = pet is not None and pet.owner_id == current_user.id
+    is_vet = appointment.vet_id == current_user.id
+    if not (is_owner or is_vet):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=NOT_ALLOWED_TO_CANCEL
+        )
 
+    if appointment.status == "cancelled":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=ALREADY_CANCELLED
+        )
 
-@router.post(
-    "/appointments/{id}/cancel",
-    response_model=AppointmentPublic,
-    summary="Cancela un turno propio o asignado",
-)
-def cancelar_turno(
-    id: int,
-    db: Annotated[Session, Depends(get_db)],
-    usuario: Annotated[User, Depends(get_current_user)],
-) -> Appointment:
-    """Cancela un turno y lo devuelve con `status` igual a `cancelled`.
-
-    Responde `404` si el turno no existe, `403` si el usuario no es el dueño de
-    la mascota ni el veterinario asignado y `409` si el turno ya estaba
-    cancelado. Al cancelar, el horario queda libre para volver a agendarlo.
-    """
-    turno = db.get(Appointment, id)
-    if turno is None:
-        raise not_found(MENSAJE_TURNO_NO_ENCONTRADO)
-
-    mascota = db.get(Pet, turno.pet_id)
-    es_dueno = mascota is not None and mascota.owner_id == usuario.id
-    es_veterinario = turno.vet_id == usuario.id
-    if not (es_dueno or es_veterinario):
-        raise forbidden(MENSAJE_CANCELACION_NO_AUTORIZADA)
-
-    if turno.status == "cancelled":
-        raise conflict(MENSAJE_TURNO_YA_CANCELADO)
-
-    turno.status = "cancelled"
+    appointment.status = "cancelled"
     db.commit()
-    db.refresh(turno)
-
-    return turno
+    db.refresh(appointment)
+    return appointment

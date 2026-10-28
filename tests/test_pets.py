@@ -1,306 +1,189 @@
-"""Pruebas del registro y del listado de mascotas."""
+"""Pruebas del registro y el listado de mascotas."""
 
-from datetime import date, datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session, sessionmaker
 
-from app.models import Pet
-from app.schemas import validar_nacimiento_no_futuro
-
-CONTRASENA = "secreto123"
-EMAIL_CLIENTE = "ana@example.com"
-EMAIL_OTRO_CLIENTE = "bruno@example.com"
-EMAIL_VETERINARIO = "dra.luz@example.com"
-
-ESPECIES_ADMITIDAS = ("dog", "cat", "other")
+from tests.conftest import auth_header, login, register_user
 
 
-def _registrar(client: TestClient, email: str, rol: str) -> dict:
-    """Registra un usuario mediante la API y devuelve el cuerpo de la respuesta."""
-    respuesta = client.post(
-        "/auth/register",
-        json={"email": email, "password": CONTRASENA, "role": rol},
+def _utc_today() -> str:
+    """Devuelve la fecha actual en UTC con formato ISO 8601."""
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def _utc_tomorrow() -> str:
+    """Devuelve la fecha de mañana en UTC con formato ISO 8601."""
+    return (datetime.now(timezone.utc).date() + timedelta(days=1)).isoformat()
+
+
+def _pet_payload(**overrides: str) -> dict:
+    """Construye el cuerpo de alta de una mascota con los datos indicados."""
+    payload = {"name": "Firulais", "species": "dog", "birth_date": "2021-03-15"}
+    payload.update(overrides)
+    return payload
+
+
+def test_alta_de_mascota_sin_token_responde_401(client: TestClient) -> None:
+    """El registro de mascotas exige un token bearer válido."""
+    response = client.post("/pets", json=_pet_payload())
+
+    assert response.status_code == 401
+
+
+def test_listado_de_mascotas_sin_token_responde_401(client: TestClient) -> None:
+    """El listado de mascotas exige un token bearer válido."""
+    response = client.get("/pets")
+
+    assert response.status_code == 401
+
+
+def test_cliente_registra_una_mascota(client: TestClient) -> None:
+    """El alta responde 201 con los datos de la mascota y su propietario."""
+    cliente = register_user(client, "ana@example.com")
+
+    response = client.post(
+        "/pets",
+        json=_pet_payload(),
+        headers=auth_header(login(client, "ana@example.com")),
     )
-    assert respuesta.status_code == 201
-    return respuesta.json()
+
+    assert response.status_code == 201
+    body = response.json()
+    assert set(body) == {"id", "name", "species", "birth_date", "owner_id"}
+    assert isinstance(body["id"], int)
+    assert body["name"] == "Firulais"
+    assert body["species"] == "dog"
+    assert body["birth_date"] == "2021-03-15"
+    assert body["owner_id"] == cliente["id"]
 
 
-def _token(client: TestClient, email: str) -> str:
-    """Inicia sesión y devuelve el token de acceso del usuario indicado."""
-    respuesta = client.post(
-        "/auth/login", json={"email": email, "password": CONTRASENA}
+def test_veterinario_no_puede_registrar_mascotas(client: TestClient) -> None:
+    """Un veterinario recibe 403 y la mascota no queda registrada."""
+    register_user(client, "dra.solis@example.com", role="vet")
+
+    response = client.post(
+        "/pets",
+        json=_pet_payload(),
+        headers=auth_header(login(client, "dra.solis@example.com")),
     )
-    assert respuesta.status_code == 200
-    return respuesta.json()["access_token"]
+
+    assert response.status_code == 403
+    listado = client.get(
+        "/pets", headers=auth_header(login(client, "dra.solis@example.com"))
+    )
+    assert listado.json() == []
 
 
-def _cabecera(token: str) -> dict[str, str]:
-    """Construye la cabecera `Authorization: Bearer` con el token indicado."""
-    return {"Authorization": f"Bearer {token}"}
+def test_especie_fuera_del_vocabulario_responde_422(client: TestClient) -> None:
+    """Una especie distinta de dog, cat y other se rechaza y no se registra."""
+    register_user(client, "ana@example.com")
+
+    response = client.post(
+        "/pets",
+        json=_pet_payload(species="hamster"),
+        headers=auth_header(login(client, "ana@example.com")),
+    )
+
+    assert response.status_code == 422
+    listado = client.get(
+        "/pets", headers=auth_header(login(client, "ana@example.com"))
+    )
+    assert listado.json() == []
 
 
-def _cliente_autenticado(
-    client: TestClient, email: str = EMAIL_CLIENTE
-) -> tuple[dict, str]:
-    """Registra un cliente, inicia sesión y devuelve su cuerpo y su token."""
-    cuerpo = _registrar(client, email, "client")
-    return cuerpo, _token(client, email)
+def test_especie_other_se_acepta(client: TestClient) -> None:
+    """La especie `other` pertenece al vocabulario y se registra."""
+    register_user(client, "ana@example.com")
+
+    response = client.post(
+        "/pets",
+        json=_pet_payload(species="other"),
+        headers=auth_header(login(client, "ana@example.com")),
+    )
+
+    assert response.status_code == 201
+    assert response.json()["species"] == "other"
 
 
-def _total_de_mascotas(sesion_local: sessionmaker[Session]) -> int:
-    """Cuenta las mascotas almacenadas en la base de pruebas."""
-    with sesion_local() as sesion:
-        return sesion.scalar(select(func.count()).select_from(Pet)) or 0
+def test_fecha_de_nacimiento_futura_responde_422(client: TestClient) -> None:
+    """Una mascota nacida mañana se rechaza y no se registra."""
+    register_user(client, "ana@example.com")
+
+    response = client.post(
+        "/pets",
+        json=_pet_payload(birth_date=_utc_tomorrow()),
+        headers=auth_header(login(client, "ana@example.com")),
+    )
+
+    assert response.status_code == 422
+    listado = client.get(
+        "/pets", headers=auth_header(login(client, "ana@example.com"))
+    )
+    assert listado.json() == []
 
 
-def _fecha_actual_de_la_api() -> date:
-    """Devuelve la fecha que la aplicación considera el día actual.
+def test_mascota_nacida_hoy_se_acepta(client: TestClient) -> None:
+    """Una mascota nacida el día actual es válida."""
+    register_user(client, "ana@example.com")
 
-    La fecha se delega en el validador de la API (`validar_nacimiento_no_futuro`),
-    que compara con el día en UTC. Así la prueba usa exactamente la misma zona
-    horaria que la aplicación y no depende de la hora local del equipo: un
-    cambio de día en UTC durante la prueba no invalida el caso, porque la fecha
-    derivada nunca queda en el futuro respecto del instante de la petición.
-    """
-    return validar_nacimiento_no_futuro(datetime.now(timezone.utc).date())
+    response = client.post(
+        "/pets",
+        json=_pet_payload(birth_date=_utc_today()),
+        headers=auth_header(login(client, "ana@example.com")),
+    )
+
+    assert response.status_code == 201
+    assert response.json()["birth_date"] == _utc_today()
 
 
-# --- Alta de mascotas --------------------------------------------------------
+def test_listado_muestra_solo_las_mascotas_del_cliente(client: TestClient) -> None:
+    """Cada cliente ve únicamente las mascotas que registró."""
+    register_user(client, "ana@example.com")
+    register_user(client, "bruno@example.com")
+    token_ana = login(client, "ana@example.com")
+    token_bruno = login(client, "bruno@example.com")
+
+    creada_por_ana = client.post(
+        "/pets", json=_pet_payload(name="Firulais"), headers=auth_header(token_ana)
+    )
+    creada_por_bruno = client.post(
+        "/pets", json=_pet_payload(name="Roco"), headers=auth_header(token_bruno)
+    )
+
+    assert creada_por_ana.status_code == 201
+    assert creada_por_bruno.status_code == 201
+    listado = client.get("/pets", headers=auth_header(token_ana))
+
+    assert listado.status_code == 200
+    body = listado.json()
+    assert [pet["name"] for pet in body] == ["Firulais"]
+    assert body[0]["id"] == creada_por_ana.json()["id"]
 
 
-def test_alta_de_mascota_responde_201_con_todos_los_campos(
+def test_veterinario_no_ve_mascotas_de_los_clientes(client: TestClient) -> None:
+    """El listado de un veterinario no expone las mascotas de otros."""
+    register_user(client, "ana@example.com")
+    register_user(client, "dra.solis@example.com", role="vet")
+    token_ana = login(client, "ana@example.com")
+    token_vet = login(client, "dra.solis@example.com")
+    client.post("/pets", json=_pet_payload(), headers=auth_header(token_ana))
+
+    response = client.get("/pets", headers=auth_header(token_vet))
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_listado_sin_mascotas_responde_200_con_lista_vacia(
     client: TestClient,
 ) -> None:
-    cliente, token = _cliente_autenticado(client)
+    """Un cliente sin mascotas registradas recibe un arreglo vacío."""
+    register_user(client, "ana@example.com")
 
-    respuesta = client.post(
-        "/pets",
-        json={"name": "Firulais", "species": "dog", "birth_date": "2020-05-04"},
-        headers=_cabecera(token),
+    response = client.get(
+        "/pets", headers=auth_header(login(client, "ana@example.com"))
     )
 
-    assert respuesta.status_code == 201
-    cuerpo = respuesta.json()
-    assert set(cuerpo) == {"id", "name", "species", "birth_date", "owner_id"}
-    assert cuerpo["name"] == "Firulais"
-    assert cuerpo["species"] == "dog"
-    assert cuerpo["birth_date"] == "2020-05-04"
-    assert cuerpo["owner_id"] == cliente["id"]
-    assert isinstance(cuerpo["id"], int)
-
-
-def test_la_mascota_se_guarda_con_el_cliente_autenticado_como_propietario(
-    client: TestClient, sesion_local: sessionmaker[Session]
-) -> None:
-    cliente, token = _cliente_autenticado(client)
-
-    respuesta = client.post(
-        "/pets",
-        json={"name": "Luna", "species": "cat", "birth_date": "2021-08-15"},
-        headers=_cabecera(token),
-    )
-
-    assert respuesta.status_code == 201
-    with sesion_local() as sesion:
-        mascota = sesion.scalar(select(Pet).where(Pet.name == "Luna"))
-    assert mascota is not None
-    assert mascota.owner_id == cliente["id"]
-
-
-def test_el_propietario_no_puede_elegirse_en_el_cuerpo(
-    client: TestClient,
-) -> None:
-    cliente, token = _cliente_autenticado(client)
-    otro, _ = _cliente_autenticado(client, EMAIL_OTRO_CLIENTE)
-
-    respuesta = client.post(
-        "/pets",
-        json={
-            "name": "Rayo",
-            "species": "dog",
-            "birth_date": "2022-02-02",
-            "owner_id": otro["id"],
-        },
-        headers=_cabecera(token),
-    )
-
-    assert respuesta.status_code == 201
-    assert respuesta.json()["owner_id"] == cliente["id"]
-
-
-@pytest.mark.parametrize("especie", ESPECIES_ADMITIDAS)
-def test_las_especies_admitidas_registran_la_mascota(
-    client: TestClient, especie: str
-) -> None:
-    _, token = _cliente_autenticado(client)
-
-    respuesta = client.post(
-        "/pets",
-        json={"name": "Paco", "species": especie, "birth_date": "2021-01-01"},
-        headers=_cabecera(token),
-    )
-
-    assert respuesta.status_code == 201
-    assert respuesta.json()["species"] == especie
-
-
-def test_una_especie_no_admitida_responde_422_y_no_registra(
-    client: TestClient, sesion_local: sessionmaker[Session]
-) -> None:
-    _, token = _cliente_autenticado(client)
-
-    respuesta = client.post(
-        "/pets",
-        json={"name": "Paco", "species": "hamster", "birth_date": "2021-01-01"},
-        headers=_cabecera(token),
-    )
-
-    assert respuesta.status_code == 422
-    assert _total_de_mascotas(sesion_local) == 0
-
-
-def test_una_fecha_de_nacimiento_futura_responde_422_y_no_registra(
-    client: TestClient, sesion_local: sessionmaker[Session]
-) -> None:
-    _, token = _cliente_autenticado(client)
-
-    respuesta = client.post(
-        "/pets",
-        json={"name": "Futura", "species": "cat", "birth_date": "2999-01-01"},
-        headers=_cabecera(token),
-    )
-
-    assert respuesta.status_code == 422
-    assert _total_de_mascotas(sesion_local) == 0
-
-
-def test_una_fecha_de_nacimiento_igual_al_dia_actual_responde_201(
-    client: TestClient,
-) -> None:
-    _, token = _cliente_autenticado(client)
-    hoy = _fecha_actual_de_la_api().isoformat()
-
-    respuesta = client.post(
-        "/pets",
-        json={"name": "Hoy", "species": "cat", "birth_date": hoy},
-        headers=_cabecera(token),
-    )
-
-    assert respuesta.status_code == 201
-    assert respuesta.json()["birth_date"] == hoy
-
-
-def test_el_veterinario_no_puede_registrar_mascotas(
-    client: TestClient, sesion_local: sessionmaker[Session]
-) -> None:
-    _registrar(client, EMAIL_VETERINARIO, "vet")
-    token = _token(client, EMAIL_VETERINARIO)
-
-    respuesta = client.post(
-        "/pets",
-        json={"name": "Rayo", "species": "dog", "birth_date": "2022-02-02"},
-        headers=_cabecera(token),
-    )
-
-    assert respuesta.status_code == 403
-    assert _total_de_mascotas(sesion_local) == 0
-
-
-def test_el_alta_sin_token_responde_401(client: TestClient) -> None:
-    respuesta = client.post(
-        "/pets",
-        json={"name": "Firulais", "species": "dog", "birth_date": "2020-05-04"},
-    )
-
-    assert respuesta.status_code == 401
-    assert "detail" in respuesta.json()
-
-
-def test_el_alta_con_token_invalido_responde_401(
-    client: TestClient, sesion_local: sessionmaker[Session]
-) -> None:
-    respuesta = client.post(
-        "/pets",
-        json={"name": "Firulais", "species": "dog", "birth_date": "2020-05-04"},
-        headers={"Authorization": "Bearer token.inventado.aaa"},
-    )
-
-    assert respuesta.status_code == 401
-    assert _total_de_mascotas(sesion_local) == 0
-
-
-# --- Listado de mascotas -----------------------------------------------------
-
-
-def test_el_listado_devuelve_solo_las_mascotas_propias(client: TestClient) -> None:
-    cliente, token_cliente = _cliente_autenticado(client)
-    _, token_otro = _cliente_autenticado(client, EMAIL_OTRO_CLIENTE)
-
-    for nombre in ("Firulais", "Luna"):
-        respuesta = client.post(
-            "/pets",
-            json={"name": nombre, "species": "dog", "birth_date": "2020-05-04"},
-            headers=_cabecera(token_cliente),
-        )
-        assert respuesta.status_code == 201
-    respuesta = client.post(
-        "/pets",
-        json={"name": "Rayo", "species": "cat", "birth_date": "2021-03-03"},
-        headers=_cabecera(token_otro),
-    )
-    assert respuesta.status_code == 201
-
-    respuesta = client.get("/pets", headers=_cabecera(token_cliente))
-
-    assert respuesta.status_code == 200
-    mascotas = respuesta.json()
-    assert {mascota["name"] for mascota in mascotas} == {"Firulais", "Luna"}
-    assert {mascota["owner_id"] for mascota in mascotas} == {cliente["id"]}
-
-
-def test_el_listado_de_un_cliente_sin_mascotas_devuelve_un_arreglo_vacio(
-    client: TestClient,
-) -> None:
-    _, token = _cliente_autenticado(client, EMAIL_OTRO_CLIENTE)
-
-    respuesta = client.get("/pets", headers=_cabecera(token))
-
-    assert respuesta.status_code == 200
-    assert respuesta.json() == []
-
-
-def test_el_listado_sin_token_responde_401(client: TestClient) -> None:
-    respuesta = client.get("/pets")
-
-    assert respuesta.status_code == 401
-    assert "detail" in respuesta.json()
-
-
-def test_el_listado_con_token_invalido_responde_401(client: TestClient) -> None:
-    respuesta = client.get(
-        "/pets", headers={"Authorization": "Bearer token.inventado.aaa"}
-    )
-
-    assert respuesta.status_code == 401
-
-
-def test_el_veterinario_no_ve_las_mascotas_de_los_clientes(
-    client: TestClient,
-) -> None:
-    _, token_cliente = _cliente_autenticado(client)
-    _registrar(client, EMAIL_VETERINARIO, "vet")
-    token_vet = _token(client, EMAIL_VETERINARIO)
-    respuesta = client.post(
-        "/pets",
-        json={"name": "Firulais", "species": "dog", "birth_date": "2020-05-04"},
-        headers=_cabecera(token_cliente),
-    )
-    assert respuesta.status_code == 201
-
-    respuesta = client.get("/pets", headers=_cabecera(token_vet))
-
-    assert respuesta.status_code == 200
-    assert respuesta.json() == []
+    assert response.status_code == 200
+    assert response.json() == []

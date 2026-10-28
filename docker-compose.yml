@@ -1,85 +1,35 @@
-# Orquestación local de la API de la clínica veterinaria.
-#
-# Servicios:
-#   db    -> PostgreSQL 16 con volumen persistente y comprobación de salud.
-#   api   -> API construida desde la etapa `runtime` del `Dockerfile` de la raíz.
-#   tests -> Etapa `test` del mismo `Dockerfile`, que suma las dependencias de
-#            desarrollo y la suite de pruebas para ejecutarla en el contenedor.
-#
-# La imagen de la API no incluye el entorno de desarrollo: la etapa `runtime`
-# solo contiene el código de la aplicación y las dependencias de ejecución.
-#
-# Toda la configuración llega por variables de entorno: los valores por defecto
-# son los del entorno local y se pueden sobrescribir con el entorno del shell o
-# con un archivo `.env` en la raíz del repositorio. El repositorio no contiene
-# secretos de producción.
-
 services:
-  db:
-    image: postgres:16
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-vetclinic}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vetclinic}
-      POSTGRES_DB: ${POSTGRES_DB:-vetclinic}
+      # Host "db": es el nombre del servicio de PostgreSQL de este mismo archivo.
+      DATABASE_URL: postgresql+psycopg://clinic:clinic@db:5432/clinic
+      # Clave de desarrollo; se sustituye por la de .env en el despliegue interno.
+      JWT_SECRET: ${JWT_SECRET:-clave-de-desarrollo-local-cambiar-en-produccion}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: clinic
+      POSTGRES_PASSWORD: clinic
+      POSTGRES_DB: clinic
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - clinic-db-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vetclinic} -d ${POSTGRES_DB:-vetclinic}"]
+      test: ["CMD-SHELL", "pg_isready -U clinic -d clinic"]
       interval: 5s
       timeout: 5s
-      retries: 12
-      start_period: 10s
+      retries: 10
     restart: unless-stopped
-
-  api:
-    image: vetclinic-api
-    build:
-      context: .
-      target: runtime
-    depends_on:
-      db:
-        condition: service_healthy
-    environment:
-      # La API alcanza a PostgreSQL por el nombre del servicio, no por localhost.
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-vetclinic}:${POSTGRES_PASSWORD:-vetclinic}@db:5432/${POSTGRES_DB:-vetclinic}
-      JWT_SECRET: ${JWT_SECRET:-secreto-de-desarrollo-local-cambiar-en-produccion}
-      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
-      JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-60}
-      # Puerto de escucha del contenedor: el `CMD` de la imagen lo toma del
-      # entorno y el servicio lo publica en el mismo puerto del host.
-      PORT: ${PORT:-8000}
-    ports:
-      - "${PORT:-8000}:${PORT:-8000}"
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('PORT', '8000') + '/health', timeout=3)"
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
-    restart: unless-stopped
-
-  # La suite se ejecuta como un trabajo de una sola ejecución: no lleva
-  # comprobación de salud porque termina al terminar las pruebas. Usa la etapa
-  # `test` del `Dockerfile`, que incluye las dependencias de desarrollo.
-  tests:
-    image: vetclinic-tests
-    build:
-      context: .
-      target: test
-    depends_on:
-      db:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-vetclinic}:${POSTGRES_PASSWORD:-vetclinic}@db:5432/${POSTGRES_DB:-vetclinic}
-      TEST_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-vetclinic}:${POSTGRES_PASSWORD:-vetclinic}@db:5432/${POSTGRES_DB:-vetclinic}_test
-      JWT_SECRET: ${JWT_SECRET:-secreto-de-desarrollo-local-cambiar-en-produccion}
-      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
-      JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-60}
-    command: pytest -q
 
 volumes:
-  pgdata:
+  clinic-db-data:

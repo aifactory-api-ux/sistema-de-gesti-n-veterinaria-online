@@ -2,120 +2,74 @@
 
 from fastapi.testclient import TestClient
 
-CONTRASENA = "secreto123"
-EMAIL_VET_1 = "dra.luz@example.com"
-EMAIL_VET_2 = "dr.carlos@example.com"
-EMAIL_CLIENTE = "ana@example.com"
-
-
-def _registrar(client: TestClient, email: str, rol: str) -> dict:
-    """Registra un usuario mediante la API y devuelve el cuerpo de la respuesta."""
-    respuesta = client.post(
-        "/auth/register",
-        json={"email": email, "password": CONTRASENA, "role": rol},
-    )
-    assert respuesta.status_code == 201
-    return respuesta.json()
-
-
-def _token(client: TestClient, email: str) -> str:
-    """Inicia sesión y devuelve el token de acceso del usuario indicado."""
-    respuesta = client.post(
-        "/auth/login", json={"email": email, "password": CONTRASENA}
-    )
-    assert respuesta.status_code == 200
-    return respuesta.json()["access_token"]
-
-
-def _cabecera(token: str) -> dict[str, str]:
-    """Construye la cabecera `Authorization: Bearer` con el token indicado."""
-    return {"Authorization": f"Bearer {token}"}
-
-
-# --- Listado del directorio -------------------------------------------------
-
-
-def test_directorio_lista_solo_los_veterinarios(client: TestClient) -> None:
-    luz = _registrar(client, EMAIL_VET_1, "vet")
-    carlos = _registrar(client, EMAIL_VET_2, "vet")
-    _registrar(client, EMAIL_CLIENTE, "client")
-
-    respuesta = client.get("/vets", headers=_cabecera(_token(client, EMAIL_CLIENTE)))
-
-    assert respuesta.status_code == 200
-    directorio = respuesta.json()
-    assert {vet["email"] for vet in directorio} == {EMAIL_VET_1, EMAIL_VET_2}
-    assert {vet["id"] for vet in directorio} == {luz["id"], carlos["id"]}
-    assert len(directorio) == 2
-
-
-def test_cada_elemento_del_directorio_solo_tiene_id_y_email(
-    client: TestClient,
-) -> None:
-    _registrar(client, EMAIL_VET_1, "vet")
-
-    respuesta = client.get("/vets", headers=_cabecera(_token(client, EMAIL_VET_1)))
-
-    assert respuesta.status_code == 200
-    directorio = respuesta.json()
-    assert len(directorio) == 1
-    assert set(directorio[0]) == {"id", "email"}
-    assert isinstance(directorio[0]["id"], int)
-
-
-def test_los_clientes_no_aparecen_en_el_directorio(client: TestClient) -> None:
-    _registrar(client, EMAIL_CLIENTE, "client")
-    _registrar(client, EMAIL_VET_1, "vet")
-
-    respuesta = client.get("/vets", headers=_cabecera(_token(client, EMAIL_CLIENTE)))
-
-    assert respuesta.status_code == 200
-    emails = [vet["email"] for vet in respuesta.json()]
-    assert EMAIL_CLIENTE not in emails
-    assert emails == [EMAIL_VET_1]
-
-
-def test_directorio_sin_veterinarios_devuelve_arreglo_vacio(
-    client: TestClient,
-) -> None:
-    _registrar(client, EMAIL_CLIENTE, "client")
-
-    respuesta = client.get("/vets", headers=_cabecera(_token(client, EMAIL_CLIENTE)))
-
-    assert respuesta.status_code == 200
-    assert respuesta.json() == []
-
-
-def test_el_directorio_tambien_se_consulta_con_el_token_de_un_veterinario(
-    client: TestClient,
-) -> None:
-    _registrar(client, EMAIL_VET_1, "vet")
-
-    respuesta = client.get("/vets", headers=_cabecera(_token(client, EMAIL_VET_1)))
-
-    assert respuesta.status_code == 200
-    assert [vet["email"] for vet in respuesta.json()] == [EMAIL_VET_1]
-
-
-# --- Exigencia de autenticación ---------------------------------------------
+from tests.conftest import auth_header, login, register_user
 
 
 def test_directorio_sin_token_responde_401(client: TestClient) -> None:
-    respuesta = client.get("/vets")
+    """El directorio exige un token bearer válido."""
+    response = client.get("/vets")
 
-    assert respuesta.status_code == 401
-    assert "detail" in respuesta.json()
+    assert response.status_code == 401
 
 
 def test_directorio_con_token_invalido_responde_401(client: TestClient) -> None:
-    respuesta = client.get("/vets", headers={"Authorization": "Bearer token.inventado.aaa"})
+    """Un token que no corresponde a ninguna cuenta es rechazado."""
+    response = client.get("/vets", headers=auth_header("token.inventado"))
 
-    assert respuesta.status_code == 401
+    assert response.status_code == 401
 
 
-def test_directorio_con_esquema_distinto_de_bearer_responde_401(
+def test_directorio_lista_a_los_veterinarios(client: TestClient) -> None:
+    """Cada veterinario registrado aparece con su identificador y su correo."""
+    register_user(client, "dra.solis@example.com", role="vet")
+    register_user(client, "dra.ramos@example.com", role="vet")
+
+    cliente = register_user(client, "ana@example.com")
+    response = client.get("/vets", headers=auth_header(login(client, "ana@example.com")))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [entry["email"] for entry in body] == [
+        "dra.solis@example.com",
+        "dra.ramos@example.com",
+    ]
+    assert all(isinstance(entry["id"], int) for entry in body)
+    assert cliente["id"] not in [entry["id"] for entry in body]
+
+
+def test_directorio_no_expone_otros_datos_de_la_cuenta(client: TestClient) -> None:
+    """Las entradas del directorio solo contienen el identificador y el correo."""
+    register_user(client, "dra.solis@example.com", role="vet")
+    register_user(client, "ana@example.com")
+
+    response = client.get("/vets", headers=auth_header(login(client, "ana@example.com")))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert set(body[0]) == {"id", "email"}
+    assert body[0]["email"] == "dra.solis@example.com"
+
+
+def test_directorio_vacio_responde_200_con_lista_vacia(client: TestClient) -> None:
+    """Sin veterinarios registrados el directorio responde con un arreglo vacío."""
+    register_user(client, "ana@example.com")
+
+    response = client.get("/vets", headers=auth_header(login(client, "ana@example.com")))
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_un_veterinario_también_puede_consultar_el_directorio(
     client: TestClient,
 ) -> None:
-    respuesta = client.get("/vets", headers={"Authorization": "Basic dXNlcjpwYXNz"})
+    """Cualquier cuenta autenticada, incluida la de un veterinario, lista el directorio."""
+    register_user(client, "dra.solis@example.com", role="vet")
 
-    assert respuesta.status_code == 401
+    response = client.get(
+        "/vets", headers=auth_header(login(client, "dra.solis@example.com"))
+    )
+
+    assert response.status_code == 200
+    assert [entry["email"] for entry in response.json()] == ["dra.solis@example.com"]

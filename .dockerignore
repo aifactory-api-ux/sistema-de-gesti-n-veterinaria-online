@@ -1,43 +1,17 @@
-# Exclusiones del contexto de construcción de la imagen.
-#
-# Al contexto solo viaja lo necesario para construir la API y su imagen de
-# pruebas: `app/`, `tests/`, `requirements.txt`, `requirements-dev.txt` y
-# `pyproject.toml`. La etapa de ejecución usa `app/` y `requirements.txt`; las
-# dependencias de desarrollo y la suite solo las usa la etapa de pruebas. El
-# resto se regenera o no se usa en tiempo de ejecución.
+# Entornos virtuales y cachés de Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
 
-# Control de versiones y metadatos del proyecto
-.git
-.gitignore
-.opencode
-openspec
-.artifacts
-.plan_checkpoint.json
-.progress_log
-.opencode-meta.json
-DEVELOPMENT_PLAN.md
-SPEC.md
+# La suite de pruebas no forma parte de la imagen
+tests/
 
-# Entornos virtuales y artefactos de instalación
-.venv
-venv
-build
-dist
-node_modules
+# Bases de datos locales
+*.db
+*.sqlite
+*.sqlite3
 
-# Secretos: el archivo `.env` nunca entra en la imagen
+# Secretos y metadatos del repositorio
 .env
-
-# Cachés y artefactos de Python
-__pycache__
-*.pyc
-*.pyo
-.pytest_cache
-.mypy_cache
-.ruff_cache
-.coverage
-htmlcov
-
-# Registros y documentación que no usa el proceso en ejecución
-*.log
-README.md
+.git/

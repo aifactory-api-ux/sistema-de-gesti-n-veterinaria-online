@@ -1,40 +1,32 @@
-"""Configuración de la aplicación leída del entorno."""
+"""Configuración de la aplicación leída desde el entorno."""
 
 from functools import lru_cache
-from secrets import token_urlsafe
 
-from pydantic import Field
+from pydantic import ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Valores de configuración del proyecto.
-
-    Todos los valores pueden fijarse por variable de entorno o mediante un
-    archivo `.env` en la raíz del repositorio. `JWT_SECRET` es la única variable
-    sensible: si no se define se genera un secreto aleatorio efímero, apto solo
-    para desarrollo local, por lo que en producción es obligatoria.
-    """
-
-    DATABASE_URL: str = "postgresql+psycopg://vetclinic:vetclinic@localhost:5432/vetclinic"
-    JWT_SECRET: str = Field(default_factory=lambda: token_urlsafe(32))
-    JWT_ALGORITHM: str = "HS256"
-    JWT_EXPIRE_MINUTES: int = 60
-    TEST_DATABASE_URL: str = "postgresql+psycopg://vetclinic:vetclinic@localhost:5432/vetclinic_test"
-    PORT: int = 8000
+    """Variables de entorno que la aplicación necesita para arrancar."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        case_sensitive=True,
         extra="ignore",
     )
+
+    database_url: str
+    jwt_secret: str
+    access_token_expire_minutes: int = 60
 
 
 @lru_cache
 def get_settings() -> Settings:
-    """Devuelve la instancia única de configuración de la aplicación."""
-    return Settings()
-
-
-settings = get_settings()
+    """Devuelve la configuración validada, cacheada durante todo el proceso."""
+    try:
+        return Settings()
+    except ValidationError as error:
+        missing = sorted({str(item["loc"][0]).upper() for item in error.errors()})
+        raise RuntimeError(
+            "Faltan variables de entorno obligatorias: " + ", ".join(missing)
+        ) from error

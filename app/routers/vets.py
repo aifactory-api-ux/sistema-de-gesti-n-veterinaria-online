@@ -1,6 +1,4 @@
-"""Endpoint de consulta del directorio de veterinarios."""
-
-from typing import Annotated
+"""Directorio de veterinarios de la clínica."""
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
@@ -9,27 +7,19 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models import User
-from app.schemas import VetPublic
+from app.schemas import VetResponse
 
-router = APIRouter(tags=["veterinarios"])
+router = APIRouter(prefix="/vets", tags=["vets"])
 
 
-@router.get(
-    "/vets",
-    response_model=list[VetPublic],
-    summary="Lista los veterinarios disponibles",
-)
-def listar_veterinarios(
-    db: Annotated[Session, Depends(get_db)],
-    usuario: Annotated[User, Depends(get_current_user)],
+@router.get("", response_model=list[VetResponse])
+def list_vets(
+    _current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> list[User]:
-    """Devuelve los veterinarios registrados como una lista de `{id, email}`.
+    """Devuelve las cuentas con rol de veterinario.
 
-    Solo se incluyen los usuarios con rol `vet`: los clientes no aparecen en
-    el directorio. La dependencia `get_current_user` exige un token Bearer
-    válido, de modo que sin cabecera o con un token inválido la API responde
-    `401` antes de llegar al manejador.
+    La dependencia exige un token válido aunque el listado no dependa del rol
+    de quien consulta.
     """
-    return list(
-        db.scalars(select(User).where(User.role == "vet").order_by(User.id)).all()
-    )
+    return list(db.scalars(select(User).where(User.role == "vet").order_by(User.id)))

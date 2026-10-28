@@ -1,1 +1,1 @@
-"""Routers de la API de la clínica veterinaria."""
+"""Routers HTTP de la aplicación."""

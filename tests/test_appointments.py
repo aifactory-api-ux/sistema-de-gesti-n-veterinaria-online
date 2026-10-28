@@ -1,837 +1,478 @@
-"""Pruebas de la agenda de turnos.
+"""Pruebas del calendario de turnos de la clínica."""
 
-Las pruebas usan instantes calculados a partir del momento actual para que
-siempre caigan dentro de la ventana de agenda (lunes a sábado, de 09:00 a
-17:30 UTC) y nunca en el pasado.
-"""
+from datetime import datetime, time, timedelta, timezone
 
-from datetime import date, datetime, time, timedelta, timezone
-
-import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
-from sqlalchemy.orm import Session, sessionmaker
 
-from app.models import Appointment
-from app.services.scheduling import DIAS_DE_AGENDA
-
-CONTRASENA = "secreto123"
-EMAIL_CLIENTE = "ana@example.com"
-EMAIL_OTRO_CLIENTE = "bruno@example.com"
-EMAIL_VETERINARIO = "dra.luz@example.com"
-
-DOMINGO = 6
-SABADO = 5
-DURACION_TURNO = timedelta(minutes=30)
+from tests.conftest import auth_header, login, register_user
 
 
-# --- Utilidades --------------------------------------------------------------
+def _iso(value: datetime) -> str:
+    """Formatea un instante en ISO 8601 UTC con el sufijo Z."""
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _registrar(client: TestClient, email: str, rol: str) -> dict:
-    """Registra un usuario mediante la API y devuelve el cuerpo de la respuesta."""
-    respuesta = client.post(
-        "/auth/register",
-        json={"email": email, "password": CONTRASENA, "role": rol},
+def _next_weekday(hour: int = 9, minute: int = 0) -> datetime:
+    """Devuelve el próximo instante en día laborable, de lunes a sábado."""
+    day = datetime.now(timezone.utc).date() + timedelta(days=1)
+    while day.weekday() == 6:
+        day += timedelta(days=1)
+    return datetime.combine(day, time(hour, minute), tzinfo=timezone.utc)
+
+
+def _next_sunday(hour: int = 9, minute: int = 0) -> datetime:
+    """Devuelve el próximo domingo a la hora pedida."""
+    today = datetime.now(timezone.utc).date()
+    days_ahead = (6 - today.weekday()) % 7 or 7
+    return datetime.combine(
+        today + timedelta(days=days_ahead), time(hour, minute), tzinfo=timezone.utc
     )
-    assert respuesta.status_code == 201
-    return respuesta.json()
 
 
-def _token(client: TestClient, email: str) -> str:
-    """Inicia sesión y devuelve el token de acceso del usuario indicado."""
-    respuesta = client.post(
-        "/auth/login", json={"email": email, "password": CONTRASENA}
-    )
-    assert respuesta.status_code == 200
-    return respuesta.json()["access_token"]
+def _past_weekday(hour: int = 9, minute: int = 0) -> datetime:
+    """Devuelve un instante ya pasado que aún cae en día laborable."""
+    day = datetime.now(timezone.utc).date() - timedelta(days=2)
+    while day.weekday() == 6:
+        day -= timedelta(days=1)
+    return datetime.combine(day, time(hour, minute), tzinfo=timezone.utc)
 
 
-def _usuario(client: TestClient, email: str, rol: str) -> tuple[dict, str]:
-    """Registra un usuario, inicia sesión y devuelve su cuerpo y su token."""
-    cuerpo = _registrar(client, email, rol)
-    return cuerpo, _token(client, email)
+def _registrar_cliente(client: TestClient, email: str) -> tuple[int, str]:
+    """Registra un cliente y devuelve su identificador y su token."""
+    cuenta = register_user(client, email)
+    return cuenta["id"], login(client, email)
 
 
-def _cabecera(token: str) -> dict[str, str]:
-    """Construye la cabecera `Authorization: Bearer` con el token indicado."""
-    return {"Authorization": f"Bearer {token}"}
+def _registrar_vet(client: TestClient, email: str) -> tuple[int, str]:
+    """Registra un veterinario y devuelve su identificador y su token."""
+    cuenta = register_user(client, email, role="vet")
+    return cuenta["id"], login(client, email)
 
 
-def _dia_de_agenda() -> date:
-    """Devuelve la fecha del próximo día con agenda (de lunes a sábado)."""
-    dia = datetime.now(timezone.utc).date() + timedelta(days=1)
-    while dia.weekday() not in DIAS_DE_AGENDA:
-        dia += timedelta(days=1)
-    return dia
-
-
-def _instante(dia: date, hora: int, minuto: int = 0) -> datetime:
-    """Construye un instante en UTC a partir de una fecha y una hora."""
-    return datetime.combine(dia, time(hour=hora, minute=minuto), tzinfo=timezone.utc)
-
-
-def _inicio(hora: int, minuto: int = 0) -> str:
-    """Devuelve el inicio ISO 8601 del próximo día de agenda a la hora dada."""
-    return _instante(_dia_de_agenda(), hora, minuto).isoformat()
-
-
-def _inicio_con_desplazamiento(horas: int) -> str:
-    """Devuelve el inicio ISO 8601 del próximo día de agenda con otro desplazamiento."""
-    utc = _instante(_dia_de_agenda(), 9, 0)
-    return utc.astimezone(timezone(timedelta(hours=horas))).isoformat()
-
-
-def _inicio_sin_zona() -> str:
-    """Devuelve el inicio ISO 8601 del próximo día de agenda sin zona horaria."""
-    return _instante(_dia_de_agenda(), 9, 0).replace(tzinfo=None).isoformat()
-
-
-def _inicio_pasado() -> str:
-    """Devuelve un inicio ISO 8601 de un día de agenda ya transcurrido."""
-    dia = _dia_de_agenda() - timedelta(days=7)
-    return _instante(dia, 9, 0).isoformat()
-
-
-def _inicio_de_domingo() -> str:
-    """Devuelve el inicio ISO 8601 del próximo domingo a las 09:00."""
-    dia = datetime.now(timezone.utc).date() + timedelta(days=1)
-    while dia.weekday() != DOMINGO:
-        dia += timedelta(days=1)
-    return _instante(dia, 9, 0).isoformat()
-
-
-def _inicio_de_sabado() -> str:
-    """Devuelve el inicio ISO 8601 del próximo sábado a las 10:00."""
-    dia = datetime.now(timezone.utc).date() + timedelta(days=1)
-    while dia.weekday() != SABADO:
-        dia += timedelta(days=1)
-    return _instante(dia, 10, 0).isoformat()
-
-
-def _crear_mascota(client: TestClient, token: str, nombre: str = "Firulais") -> dict:
-    """Crea una mascota con el cliente indicado y devuelve su cuerpo."""
-    respuesta = client.post(
+def _registrar_mascota(client: TestClient, token: str, name: str = "Firulais") -> int:
+    """Registra una mascota a nombre del cliente y devuelve su identificador."""
+    response = client.post(
         "/pets",
-        json={"name": nombre, "species": "dog", "birth_date": "2020-05-04"},
-        headers=_cabecera(token),
+        json={"name": name, "species": "dog", "birth_date": "2021-03-15"},
+        headers=auth_header(token),
     )
-    assert respuesta.status_code == 201
-    return respuesta.json()
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
 
 
-def _total_de_turnos(sesion_local: sessionmaker[Session]) -> int:
-    """Cuenta los turnos almacenados en la base de pruebas."""
-    with sesion_local() as sesion:
-        return len(list(sesion.scalars(select(Appointment)).all()))
+def _agendar(
+    client: TestClient, token: str, pet_id: int, vet_id: int, start_at: datetime
+):
+    """Envía una solicitud de turno para el instante indicado."""
+    return client.post(
+        "/appointments",
+        json={"pet_id": pet_id, "vet_id": vet_id, "start_at": _iso(start_at)},
+        headers=auth_header(token),
+    )
 
 
-# --- Reserva de turno --------------------------------------------------------
-
-
-def test_agendar_turno_responde_201_con_todos_los_campos(
+def test_cliente_agenda_un_turno_responde_201_con_30_minutos(
     client: TestClient,
 ) -> None:
-    _registrar(client, EMAIL_CLIENTE, "client")
-    veterinario = _registrar(client, EMAIL_VETERINARIO, "vet")
-    token = _token(client, EMAIL_CLIENTE)
-    mascota = _crear_mascota(client, token)
-
-    respuesta = client.post(
-        "/appointments",
-        json={
-            "pet_id": mascota["id"],
-            "vet_id": veterinario["id"],
-            "start_at": _inicio(9, 0),
-        },
-        headers=_cabecera(token),
-    )
-
-    assert respuesta.status_code == 201
-    cuerpo = respuesta.json()
-    assert set(cuerpo) == {"id", "pet_id", "vet_id", "start_at", "end_at", "status"}
-    assert cuerpo["pet_id"] == mascota["id"]
-    assert cuerpo["vet_id"] == veterinario["id"]
-    assert cuerpo["status"] == "scheduled"
-    assert isinstance(cuerpo["id"], int)
-
-
-def test_el_turno_dura_exactamente_30_minutos(client: TestClient) -> None:
-    _, token = _usuario(client, EMAIL_CLIENTE, "client")
-    _, token_vet = _usuario(client, EMAIL_VETERINARIO, "vet")
-    mascota = _crear_mascota(client, token)
-
-    respuesta = client.post(
-        "/appointments",
-        json={
-            "pet_id": mascota["id"],
-            "vet_id": 2,
-            "start_at": _inicio(9, 0),
-        },
-        headers=_cabecera(token),
-    )
-
-    assert respuesta.status_code == 201
-    cuerpo = respuesta.json()
-    diferencia = datetime.fromisoformat(cuerpo["end_at"]) - datetime.fromisoformat(
-        cuerpo["start_at"]
-    )
-    assert diferencia == DURACION_TURNO
-    assert token_vet
-
-
-def test_el_turno_se_persiste_con_la_mascota_y_el_veterinario(
-    client: TestClient, sesion_local: sessionmaker[Session]
-) -> None:
-    _usuario(client, EMAIL_CLIENTE, "client")
-    _usuario(client, EMAIL_VETERINARIO, "vet")
-    token = _token(client, EMAIL_CLIENTE)
-    mascota = _crear_mascota(client, token)
-    inicio = _inicio(9, 0)
-
-    respuesta = client.post(
-        "/appointments",
-        json={"pet_id": mascota["id"], "vet_id": 2, "start_at": inicio},
-        headers=_cabecera(token),
-    )
-
-    assert respuesta.status_code == 201
-    with sesion_local() as sesion:
-        turno = sesion.get(Appointment, respuesta.json()["id"])
-    assert turno is not None
-    assert turno.pet_id == mascota["id"]
-    assert turno.vet_id == 2
-    assert turno.status == "scheduled"
-    assert turno.start_at == datetime.fromisoformat(inicio)
-    assert turno.end_at == datetime.fromisoformat(inicio) + DURACION_TURNO
-
-
-def test_el_veterinario_no_puede_agendar_turnos(
-    client: TestClient, sesion_local: sessionmaker[Session]
-) -> None:
-    _, token = _usuario(client, EMAIL_VETERINARIO, "vet")
-
-    respuesta = client.post(
-        "/appointments",
-        json={"pet_id": 1, "vet_id": 1, "start_at": _inicio(9, 0)},
-        headers=_cabecera(token),
-    )
-
-    assert respuesta.status_code == 403
-    assert _total_de_turnos(sesion_local) == 0
-
-
-def test_una_mascota_inexistente_responde_404(
-    client: TestClient, sesion_local: sessionmaker[Session]
-) -> None:
-    _usuario(client, EMAIL_CLIENTE, "client")
-    _usuario(client, EMAIL_VETERINARIO, "vet")
-    token = _token(client, EMAIL_CLIENTE)
-
-    respuesta = client.post(
-        "/appointments",
-        json={"pet_id": 999999, "vet_id": 2, "start_at": _inicio(9, 0)},
-        headers=_cabecera(token),
-    )
-
-    assert respuesta.status_code == 404
-    assert _total_de_turnos(sesion_local) == 0
+    """El turno se crea con estado `scheduled` y dura media hora."""
+    _cliente_id, token_cliente = _registrar_cliente(client, "ana@example.com")
+    vet_id, _token_vet = _registrar_vet(client, "dra.solis@example.com")
+    pet_id = _registrar_mascota(client, token_cliente)
+    inicio = _next_weekday(9, 0)
 
+    response = _agendar(client, token_cliente, pet_id, vet_id, inicio)
 
-def test_un_veterinario_inexistente_responde_404(
-    client: TestClient, sesion_local: sessionmaker[Session]
-) -> None:
-    _, token = _usuario(client, EMAIL_CLIENTE, "client")
-    mascota = _crear_mascota(client, token)
+    assert response.status_code == 201
+    body = response.json()
+    assert set(body) == {"id", "pet_id", "vet_id", "start_at", "end_at", "status"}
+    assert isinstance(body["id"], int)
+    assert body["pet_id"] == pet_id
+    assert body["vet_id"] == vet_id
+    assert body["status"] == "scheduled"
+    assert body["start_at"] == _iso(inicio)
+    assert body["end_at"] == _iso(inicio + timedelta(minutes=30))
 
-    respuesta = client.post(
-        "/appointments",
-        json={"pet_id": mascota["id"], "vet_id": 999999, "start_at": _inicio(9, 0)},
-        headers=_cabecera(token),
-    )
 
-    assert respuesta.status_code == 404
-    assert _total_de_turnos(sesion_local) == 0
+def test_el_turno_empieza_en_hora_y_media(client: TestClient) -> None:
+    """Un inicio en y media se acepta y el turno termina a la hora en punto."""
+    _cliente_id, token_cliente = _registrar_cliente(client, "ana@example.com")
+    vet_id, _token_vet = _registrar_vet(client, "dra.solis@example.com")
+    pet_id = _registrar_mascota(client, token_cliente)
+    inicio = _next_weekday(9, 30)
 
+    response = _agendar(client, token_cliente, pet_id, vet_id, inicio)
 
-def test_un_usuario_que_no_es_veterinario_responde_404(
-    client: TestClient, sesion_local: sessionmaker[Session]
-) -> None:
-    _, token = _usuario(client, EMAIL_CLIENTE, "client")
-    mascota = _crear_mascota(client, token)
-    _usuario(client, EMAIL_OTRO_CLIENTE, "client")
+    assert response.status_code == 201
+    assert response.json()["end_at"] == _iso(inicio + timedelta(minutes=30))
 
-    respuesta = client.post(
-        "/appointments",
-        json={"pet_id": mascota["id"], "vet_id": 2, "start_at": _inicio(9, 0)},
-        headers=_cabecera(token),
-    )
-
-    assert respuesta.status_code == 404
-    assert _total_de_turnos(sesion_local) == 0
 
+def test_el_ultimo_turno_del_dia_responde_201(client: TestClient) -> None:
+    """El último inicio permitido es a las 17:30 y el turno acaba a las 18:00."""
+    _cliente_id, token_cliente = _registrar_cliente(client, "ana@example.com")
+    vet_id, _token_vet = _registrar_vet(client, "dra.solis@example.com")
+    pet_id = _registrar_mascota(client, token_cliente)
+    inicio = _next_weekday(17, 30)
 
-def test_una_mascota_ajena_responde_403(
-    client: TestClient, sesion_local: sessionmaker[Session]
-) -> None:
-    _usuario(client, EMAIL_CLIENTE, "client")
-    _usuario(client, EMAIL_VETERINARIO, "vet")
-    _usuario(client, EMAIL_OTRO_CLIENTE, "client")
-    token_ana = _token(client, EMAIL_CLIENTE)
-    mascota = _crear_mascota(client, token_ana)
-    token_bruno = _token(client, EMAIL_OTRO_CLIENTE)
+    response = _agendar(client, token_cliente, pet_id, vet_id, inicio)
 
-    respuesta = client.post(
-        "/appointments",
-        json={"pet_id": mascota["id"], "vet_id": 2, "start_at": _inicio(9, 0)},
-        headers=_cabecera(token_bruno),
-    )
-
-    assert respuesta.status_code == 403
-    assert _total_de_turnos(sesion_local) == 0
-
-
-def test_agendar_sin_token_responde_401(client: TestClient) -> None:
-    respuesta = client.post(
-        "/appointments",
-        json={"pet_id": 1, "vet_id": 2, "start_at": _inicio(9, 0)},
-    )
-
-    assert respuesta.status_code == 401
-    assert "detail" in respuesta.json()
-
-
-def test_agendar_con_token_invalido_responde_401(
-    client: TestClient, sesion_local: sessionmaker[Session]
-) -> None:
-    respuesta = client.post(
-        "/appointments",
-        json={"pet_id": 1, "vet_id": 2, "start_at": _inicio(9, 0)},
-        headers={"Authorization": "Bearer token.inventado.aaa"},
-    )
-
-    assert respuesta.status_code == 401
-    assert _total_de_turnos(sesion_local) == 0
-
-
-# --- Reglas de agenda --------------------------------------------------------
-
-
-def test_un_turno_en_domingo_responde_422(
-    client: TestClient, sesion_local: sessionmaker[Session]
-) -> None:
-    _usuario(client, EMAIL_CLIENTE, "client")
-    _usuario(client, EMAIL_VETERINARIO, "vet")
-    token = _token(client, EMAIL_CLIENTE)
-    mascota = _crear_mascota(client, token)
-
-    respuesta = client.post(
-        "/appointments",
-        json={"pet_id": mascota["id"], "vet_id": 2, "start_at": _inicio_de_domingo()},
-        headers=_cabecera(token),
-    )
-
-    assert respuesta.status_code == 422
-    assert _total_de_turnos(sesion_local) == 0
-
-
-def test_un_turno_en_sabado_se_admite(client: TestClient) -> None:
-    _usuario(client, EMAIL_CLIENTE, "client")
-    _usuario(client, EMAIL_VETERINARIO, "vet")
-    token = _token(client, EMAIL_CLIENTE)
-    mascota = _crear_mascota(client, token)
-
-    respuesta = client.post(
-        "/appointments",
-        json={"pet_id": mascota["id"], "vet_id": 2, "start_at": _inicio_de_sabado()},
-        headers=_cabecera(token),
-    )
-
-    assert respuesta.status_code == 201
-
-
-def test_un_inicio_antes_de_las_9_responde_422(
-    client: TestClient, sesion_local: sessionmaker[Session]
-) -> None:
-    _usuario(client, EMAIL_CLIENTE, "client")
-    _usuario(client, EMAIL_VETERINARIO, "vet")
-    token = _token(client, EMAIL_CLIENTE)
-    mascota = _crear_mascota(client, token)
-
-    respuesta = client.post(
-        "/appointments",
-        json={"pet_id": mascota["id"], "vet_id": 2, "start_at": _inicio(8, 30)},
-        headers=_cabecera(token),
-    )
-
-    assert respuesta.status_code == 422
-    assert _total_de_turnos(sesion_local) == 0
-
-
-def test_un_inicio_a_las_17_30_se_admite(client: TestClient) -> None:
-    _usuario(client, EMAIL_CLIENTE, "client")
-    _usuario(client, EMAIL_VETERINARIO, "vet")
-    token = _token(client, EMAIL_CLIENTE)
-    mascota = _crear_mascota(client, token)
-
-    respuesta = client.post(
-        "/appointments",
-        json={"pet_id": mascota["id"], "vet_id": 2, "start_at": _inicio(17, 30)},
-        headers=_cabecera(token),
-    )
-
-    assert respuesta.status_code == 201
-    cuerpo = respuesta.json()
-    inicio = datetime.fromisoformat(cuerpo["start_at"])
-    fin = datetime.fromisoformat(cuerpo["end_at"])
-    assert (inicio.hour, inicio.minute) == (17, 30)
-    assert (fin.hour, fin.minute) == (18, 0)
-
-
-def test_un_inicio_a_las_18_responde_422(
-    client: TestClient, sesion_local: sessionmaker[Session]
-) -> None:
-    _usuario(client, EMAIL_CLIENTE, "client")
-    _usuario(client, EMAIL_VETERINARIO, "vet")
-    token = _token(client, EMAIL_CLIENTE)
-    mascota = _crear_mascota(client, token)
-
-    respuesta = client.post(
-        "/appointments",
-        json={"pet_id": mascota["id"], "vet_id": 2, "start_at": _inicio(18, 0)},
-        headers=_cabecera(token),
-    )
-
-    assert respuesta.status_code == 422
-    assert _total_de_turnos(sesion_local) == 0
-
-
-def test_un_inicio_con_minutos_no_admitidos_responde_422(
-    client: TestClient, sesion_local: sessionmaker[Session]
-) -> None:
-    _usuario(client, EMAIL_CLIENTE, "client")
-    _usuario(client, EMAIL_VETERINARIO, "vet")
-    token = _token(client, EMAIL_CLIENTE)
-    mascota = _crear_mascota(client, token)
-
-    respuesta = client.post(
-        "/appointments",
-        json={"pet_id": mascota["id"], "vet_id": 2, "start_at": _inicio(9, 15)},
-        headers=_cabecera(token),
-    )
-
-    assert respuesta.status_code == 422
-    assert _total_de_turnos(sesion_local) == 0
-
-
-def test_un_inicio_en_y_media_se_admite(client: TestClient) -> None:
-    _usuario(client, EMAIL_CLIENTE, "client")
-    _usuario(client, EMAIL_VETERINARIO, "vet")
-    token = _token(client, EMAIL_CLIENTE)
-    mascota = _crear_mascota(client, token)
-
-    respuesta = client.post(
-        "/appointments",
-        json={"pet_id": mascota["id"], "vet_id": 2, "start_at": _inicio(9, 30)},
-        headers=_cabecera(token),
-    )
-
-    assert respuesta.status_code == 201
-    cuerpo = respuesta.json()
-    inicio = datetime.fromisoformat(cuerpo["start_at"])
-    fin = datetime.fromisoformat(cuerpo["end_at"])
-    assert (inicio.hour, inicio.minute) == (9, 30)
-    assert (fin.hour, fin.minute) == (10, 0)
-
-
-def test_un_inicio_con_desplazamiento_se_normaliza_a_utc(client: TestClient) -> None:
-    _usuario(client, EMAIL_CLIENTE, "client")
-    _usuario(client, EMAIL_VETERINARIO, "vet")
-    token = _token(client, EMAIL_CLIENTE)
-    mascota = _crear_mascota(client, token)
-    esperado = _instante(_dia_de_agenda(), 9, 0)
-
-    respuesta = client.post(
-        "/appointments",
-        json={
-            "pet_id": mascota["id"],
-            "vet_id": 2,
-            "start_at": _inicio_con_desplazamiento(2),
-        },
-        headers=_cabecera(token),
-    )
-
-    assert respuesta.status_code == 201
-    cuerpo = respuesta.json()
-    assert datetime.fromisoformat(cuerpo["start_at"]) == esperado
-    assert cuerpo["start_at"].endswith("+00:00")
-
-
-def test_un_inicio_sin_zona_horaria_se_interpreta_como_utc(client: TestClient) -> None:
-    _usuario(client, EMAIL_CLIENTE, "client")
-    _usuario(client, EMAIL_VETERINARIO, "vet")
-    token = _token(client, EMAIL_CLIENTE)
-    mascota = _crear_mascota(client, token)
-    esperado = _instante(_dia_de_agenda(), 9, 0)
-
-    respuesta = client.post(
-        "/appointments",
-        json={"pet_id": mascota["id"], "vet_id": 2, "start_at": _inicio_sin_zona()},
-        headers=_cabecera(token),
-    )
-
-    assert respuesta.status_code == 201
-    cuerpo = respuesta.json()
-    assert datetime.fromisoformat(cuerpo["start_at"]) == esperado
-    assert cuerpo["start_at"].endswith("+00:00")
-
-
-def test_un_inicio_que_no_es_iso_8601_responde_422(
-    client: TestClient, sesion_local: sessionmaker[Session]
-) -> None:
-    _usuario(client, EMAIL_CLIENTE, "client")
-    _usuario(client, EMAIL_VETERINARIO, "vet")
-    token = _token(client, EMAIL_CLIENTE)
-    mascota = _crear_mascota(client, token)
-
-    respuesta = client.post(
-        "/appointments",
-        json={"pet_id": mascota["id"], "vet_id": 2, "start_at": "mañana a las 9"},
-        headers=_cabecera(token),
-    )
-
-    assert respuesta.status_code == 422
-    assert _total_de_turnos(sesion_local) == 0
-
-
-def test_un_inicio_en_el_pasado_responde_422(
-    client: TestClient, sesion_local: sessionmaker[Session]
-) -> None:
-    _usuario(client, EMAIL_CLIENTE, "client")
-    _usuario(client, EMAIL_VETERINARIO, "vet")
-    token = _token(client, EMAIL_CLIENTE)
-    mascota = _crear_mascota(client, token)
-
-    respuesta = client.post(
-        "/appointments",
-        json={"pet_id": mascota["id"], "vet_id": 2, "start_at": _inicio_pasado()},
-        headers=_cabecera(token),
-    )
-
-    assert respuesta.status_code == 422
-    assert _total_de_turnos(sesion_local) == 0
-
-
-# --- Conflicto de horario ----------------------------------------------------
-
-
-def test_un_turno_duplicado_del_mismo_cliente_responde_409(
-    client: TestClient, sesion_local: sessionmaker[Session]
-) -> None:
-    _usuario(client, EMAIL_CLIENTE, "client")
-    _usuario(client, EMAIL_VETERINARIO, "vet")
-    token = _token(client, EMAIL_CLIENTE)
-    mascota = _crear_mascota(client, token)
-    inicio = _inicio(9, 0)
-
-    primera = client.post(
-        "/appointments",
-        json={"pet_id": mascota["id"], "vet_id": 2, "start_at": inicio},
-        headers=_cabecera(token),
-    )
-    assert primera.status_code == 201
-
-    segunda = client.post(
-        "/appointments",
-        json={"pet_id": mascota["id"], "vet_id": 2, "start_at": inicio},
-        headers=_cabecera(token),
-    )
-
-    assert segunda.status_code == 409
-    assert _total_de_turnos(sesion_local) == 1
-
-
-def test_un_turno_duplicado_de_otro_cliente_responde_409(
-    client: TestClient, sesion_local: sessionmaker[Session]
-) -> None:
-    _usuario(client, EMAIL_CLIENTE, "client")
-    _usuario(client, EMAIL_VETERINARIO, "vet")
-    _usuario(client, EMAIL_OTRO_CLIENTE, "client")
-    token_ana = _token(client, EMAIL_CLIENTE)
-    mascota_ana = _crear_mascota(client, token_ana, "Firulais")
-    token_bruno = _token(client, EMAIL_OTRO_CLIENTE)
-    mascota_bruno = _crear_mascota(client, token_bruno, "Rayo")
-    inicio = _inicio(9, 0)
-
-    primera = client.post(
-        "/appointments",
-        json={"pet_id": mascota_ana["id"], "vet_id": 2, "start_at": inicio},
-        headers=_cabecera(token_ana),
-    )
-    assert primera.status_code == 201
-
-    segunda = client.post(
-        "/appointments",
-        json={"pet_id": mascota_bruno["id"], "vet_id": 2, "start_at": inicio},
-        headers=_cabecera(token_bruno),
-    )
-
-    assert segunda.status_code == 409
-    assert _total_de_turnos(sesion_local) == 1
-
-
-def test_otro_horario_del_mismo_veterinario_no_entra_en_conflicto(
+    assert response.status_code == 201
+    body = response.json()
+    assert body["start_at"] == _iso(inicio)
+    assert body["end_at"] == _iso(inicio + timedelta(minutes=30))
+
+
+def test_un_sabado_dentro_del_horario_responde_201(client: TestClient) -> None:
+    """La clínica atiende también los sábados."""
+    _cliente_id, token_cliente = _registrar_cliente(client, "ana@example.com")
+    vet_id, _token_vet = _registrar_vet(client, "dra.solis@example.com")
+    pet_id = _registrar_mascota(client, token_cliente)
+    inicio = _next_weekday(9, 0)
+    while inicio.weekday() != 5:
+        inicio += timedelta(days=1)
+
+    response = _agendar(client, token_cliente, pet_id, vet_id, inicio)
+
+    assert response.status_code == 201
+
+
+def test_agendar_en_un_minuto_fuera_de_la_rejilla_responde_422(
     client: TestClient,
 ) -> None:
-    _usuario(client, EMAIL_CLIENTE, "client")
-    _usuario(client, EMAIL_VETERINARIO, "vet")
-    token = _token(client, EMAIL_CLIENTE)
-    mascota = _crear_mascota(client, token)
+    """Un inicio en un minuto que no es 00 ni 30 se rechaza."""
+    _cliente_id, token_cliente = _registrar_cliente(client, "ana@example.com")
+    vet_id, _token_vet = _registrar_vet(client, "dra.solis@example.com")
+    pet_id = _registrar_mascota(client, token_cliente)
 
-    primera = client.post(
+    response = _agendar(client, token_cliente, pet_id, vet_id, _next_weekday(9, 15))
+
+    assert response.status_code == 422
+    assert client.get("/appointments", headers=auth_header(token_cliente)).json() == []
+
+
+def test_agendar_con_segundos_sobrantes_responde_422(client: TestClient) -> None:
+    """Un inicio con segundos sobrantes se rechaza."""
+    _cliente_id, token_cliente = _registrar_cliente(client, "ana@example.com")
+    vet_id, _token_vet = _registrar_vet(client, "dra.solis@example.com")
+    pet_id = _registrar_mascota(client, token_cliente)
+    inicio = _next_weekday(9, 0)
+
+    response = client.post(
         "/appointments",
-        json={"pet_id": mascota["id"], "vet_id": 2, "start_at": _inicio(9, 0)},
-        headers=_cabecera(token),
+        json={
+            "pet_id": pet_id,
+            "vet_id": vet_id,
+            "start_at": inicio.strftime("%Y-%m-%dT%H:%M:%S") + "30Z",
+        },
+        headers=auth_header(token_cliente),
     )
+
+    assert response.status_code == 422
+
+
+def test_agendar_un_domingo_responde_422(client: TestClient) -> None:
+    """La clínica no atiende los domingos."""
+    _cliente_id, token_cliente = _registrar_cliente(client, "ana@example.com")
+    vet_id, _token_vet = _registrar_vet(client, "dra.solis@example.com")
+    pet_id = _registrar_mascota(client, token_cliente)
+
+    response = _agendar(client, token_cliente, pet_id, vet_id, _next_sunday(9, 0))
+
+    assert response.status_code == 422
+
+
+def test_agendar_antes_de_la_apertura_responde_422(client: TestClient) -> None:
+    """Un inicio anterior a las 09:00 se rechaza."""
+    _cliente_id, token_cliente = _registrar_cliente(client, "ana@example.com")
+    vet_id, _token_vet = _registrar_vet(client, "dra.solis@example.com")
+    pet_id = _registrar_mascota(client, token_cliente)
+
+    response = _agendar(client, token_cliente, pet_id, vet_id, _next_weekday(8, 30))
+
+    assert response.status_code == 422
+
+
+def test_agendar_despues_del_ultimo_inicio_responde_422(client: TestClient) -> None:
+    """Un inicio posterior a las 17:30 se rechaza."""
+    _cliente_id, token_cliente = _registrar_cliente(client, "ana@example.com")
+    vet_id, _token_vet = _registrar_vet(client, "dra.solis@example.com")
+    pet_id = _registrar_mascota(client, token_cliente)
+
+    response = _agendar(client, token_cliente, pet_id, vet_id, _next_weekday(18, 0))
+
+    assert response.status_code == 422
+
+
+def test_agendar_en_el_pasado_responde_422(client: TestClient) -> None:
+    """Un inicio ya pasado no se puede reservar."""
+    _cliente_id, token_cliente = _registrar_cliente(client, "ana@example.com")
+    vet_id, _token_vet = _registrar_vet(client, "dra.solis@example.com")
+    pet_id = _registrar_mascota(client, token_cliente)
+
+    response = _agendar(client, token_cliente, pet_id, vet_id, _past_weekday(9, 0))
+
+    assert response.status_code == 422
+    assert client.get("/appointments", headers=auth_header(token_cliente)).json() == []
+
+
+def test_el_inicio_con_desplazamiento_se_convierte_a_utc(client: TestClient) -> None:
+    """Un inicio con offset explícito se interpreta y se devuelve en UTC."""
+    _cliente_id, token_cliente = _registrar_cliente(client, "ana@example.com")
+    vet_id, _token_vet = _registrar_vet(client, "dra.solis@example.com")
+    pet_id = _registrar_mascota(client, token_cliente)
+    inicio_utc = _next_weekday(15, 0)
+    desplazado = inicio_utc.astimezone(timezone(timedelta(hours=-3)))
+
+    response = client.post(
+        "/appointments",
+        json={
+            "pet_id": pet_id,
+            "vet_id": vet_id,
+            "start_at": desplazado.isoformat(),
+        },
+        headers=auth_header(token_cliente),
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["start_at"] == _iso(inicio_utc)
+    assert body["end_at"] == _iso(inicio_utc + timedelta(minutes=30))
+
+
+def test_un_veterinario_no_puede_agendar_responde_403(client: TestClient) -> None:
+    """Solo los clientes reservan turnos."""
+    _cliente_id, token_cliente = _registrar_cliente(client, "ana@example.com")
+    vet_id, token_vet = _registrar_vet(client, "dra.solis@example.com")
+    pet_id = _registrar_mascota(client, token_cliente)
+
+    response = _agendar(client, token_vet, pet_id, vet_id, _next_weekday(9, 0))
+
+    assert response.status_code == 403
+    assert client.get("/appointments", headers=auth_header(token_cliente)).json() == []
+
+
+def test_agendar_una_mascota_ajena_responde_403(client: TestClient) -> None:
+    """Un cliente no puede agendar una mascota que no es suya."""
+    _cliente_id, token_cliente = _registrar_cliente(client, "ana@example.com")
+    _otro_id, token_otro = _registrar_cliente(client, "bruno@example.com")
+    vet_id, _token_vet = _registrar_vet(client, "dra.solis@example.com")
+    pet_id = _registrar_mascota(client, token_otro)
+
+    response = _agendar(client, token_cliente, pet_id, vet_id, _next_weekday(9, 0))
+
+    assert response.status_code == 403
+    assert client.get("/appointments", headers=auth_header(token_otro)).json() == []
+
+
+def test_agendar_una_mascota_inexistente_responde_404(client: TestClient) -> None:
+    """Una mascota que no existe no permite crear el turno."""
+    _cliente_id, token_cliente = _registrar_cliente(client, "ana@example.com")
+    vet_id, _token_vet = _registrar_vet(client, "dra.solis@example.com")
+
+    response = _agendar(client, token_cliente, 999, vet_id, _next_weekday(9, 0))
+
+    assert response.status_code == 404
+
+
+def test_agendar_un_veterinario_inexistente_responde_404(client: TestClient) -> None:
+    """Un veterinario que no existe no permite crear el turno."""
+    _cliente_id, token_cliente = _registrar_cliente(client, "ana@example.com")
+    pet_id = _registrar_mascota(client, token_cliente)
+
+    response = _agendar(client, token_cliente, pet_id, 999, _next_weekday(9, 0))
+
+    assert response.status_code == 404
+
+
+def test_agendar_una_cuenta_que_no_es_veterinario_responde_404(
+    client: TestClient,
+) -> None:
+    """El id de un cliente no identifica a un veterinario."""
+    _cliente_id, token_cliente = _registrar_cliente(client, "ana@example.com")
+    otro_id, _token_otro = _registrar_cliente(client, "bruno@example.com")
+    pet_id = _registrar_mascota(client, token_cliente)
+
+    response = _agendar(client, token_cliente, pet_id, otro_id, _next_weekday(9, 0))
+
+    assert response.status_code == 404
+
+
+def test_dos_clientes_no_pueden_agendar_el_mismo_horario_responde_409(
+    client: TestClient,
+) -> None:
+    """El veterinario conserva un solo turno activo por horario."""
+    _cliente_id, token_cliente = _registrar_cliente(client, "ana@example.com")
+    _otro_id, token_otro = _registrar_cliente(client, "bruno@example.com")
+    vet_id, token_vet = _registrar_vet(client, "dra.solis@example.com")
+    pet_ana = _registrar_mascota(client, token_cliente, "Firulais")
+    pet_bruno = _registrar_mascota(client, token_otro, "Roco")
+    inicio = _next_weekday(9, 0)
+
+    primera = _agendar(client, token_cliente, pet_ana, vet_id, inicio)
+    segunda = _agendar(client, token_otro, pet_bruno, vet_id, inicio)
+
     assert primera.status_code == 201
+    assert segunda.status_code == 409
+    turnos = client.get("/appointments", headers=auth_header(token_vet)).json()
+    assert len(turnos) == 1
+    assert turnos[0]["start_at"] == _iso(inicio)
 
-    segunda = client.post(
-        "/appointments",
-        json={"pet_id": mascota["id"], "vet_id": 2, "start_at": _inicio(10, 0)},
-        headers=_cabecera(token),
-    )
 
+def test_dos_veterinarios_pueden_agendar_a_la_misma_hora(client: TestClient) -> None:
+    """Cada veterinario tiene su propia agenda."""
+    _cliente_id, token_cliente = _registrar_cliente(client, "ana@example.com")
+    vet_solis, _token_solis = _registrar_vet(client, "dra.solis@example.com")
+    vet_luna, _token_luna = _registrar_vet(client, "dr.luna@example.com")
+    pet_id = _registrar_mascota(client, token_cliente)
+    inicio = _next_weekday(9, 0)
+
+    primera = _agendar(client, token_cliente, pet_id, vet_solis, inicio)
+    segunda = _agendar(client, token_cliente, pet_id, vet_luna, inicio)
+
+    assert primera.status_code == 201
     assert segunda.status_code == 201
 
 
-# --- Listado de turnos -------------------------------------------------------
-
-
 def test_el_cliente_ve_solo_los_turnos_de_sus_mascotas(client: TestClient) -> None:
-    _usuario(client, EMAIL_CLIENTE, "client")
-    _usuario(client, EMAIL_VETERINARIO, "vet")
-    _usuario(client, EMAIL_OTRO_CLIENTE, "client")
-    token_ana = _token(client, EMAIL_CLIENTE)
-    mascota_ana = _crear_mascota(client, token_ana, "Firulais")
-    token_bruno = _token(client, EMAIL_OTRO_CLIENTE)
-    mascota_bruno = _crear_mascota(client, token_bruno, "Rayo")
+    """Cada cliente ve únicamente los turnos de las mascotas que registró."""
+    _cliente_id, token_cliente = _registrar_cliente(client, "ana@example.com")
+    _otro_id, token_otro = _registrar_cliente(client, "bruno@example.com")
+    vet_id, _token_vet = _registrar_vet(client, "dra.solis@example.com")
+    pet_ana = _registrar_mascota(client, token_cliente, "Firulais")
+    pet_bruno = _registrar_mascota(client, token_otro, "Roco")
+    _agendar(client, token_cliente, pet_ana, vet_id, _next_weekday(9, 0))
+    _agendar(client, token_otro, pet_bruno, vet_id, _next_weekday(10, 0))
 
-    turno_ana = client.post(
-        "/appointments",
-        json={"pet_id": mascota_ana["id"], "vet_id": 2, "start_at": _inicio(9, 0)},
-        headers=_cabecera(token_ana),
-    )
-    assert turno_ana.status_code == 201
-    turno_bruno = client.post(
-        "/appointments",
-        json={"pet_id": mascota_bruno["id"], "vet_id": 2, "start_at": _inicio(10, 0)},
-        headers=_cabecera(token_bruno),
-    )
-    assert turno_bruno.status_code == 201
-
-    respuesta = client.get("/appointments", headers=_cabecera(token_ana))
+    respuesta = client.get("/appointments", headers=auth_header(token_cliente))
 
     assert respuesta.status_code == 200
     turnos = respuesta.json()
-    assert [turno["id"] for turno in turnos] == [turno_ana.json()["id"]]
+    assert len(turnos) == 1
+    assert turnos[0]["pet_id"] == pet_ana
+    assert set(turnos[0]) == {"id", "pet_id", "vet_id", "start_at", "end_at", "status"}
 
 
-def test_el_veterinario_ve_solo_los_turnos_asignados(client: TestClient) -> None:
-    _usuario(client, EMAIL_CLIENTE, "client")
-    _usuario(client, EMAIL_VETERINARIO, "vet")
-    token_ana = _token(client, EMAIL_CLIENTE)
-    mascota = _crear_mascota(client, token_ana)
-    token_vet = _token(client, EMAIL_VETERINARIO)
+def test_el_veterinario_ve_solo_sus_turnos(client: TestClient) -> None:
+    """El veterinario ve los turnos en los que es el responsable."""
+    _cliente_id, token_cliente = _registrar_cliente(client, "ana@example.com")
+    vet_solis, token_solis = _registrar_vet(client, "dra.solis@example.com")
+    vet_luna, _token_luna = _registrar_vet(client, "dr.luna@example.com")
+    pet_id = _registrar_mascota(client, token_cliente)
+    _agendar(client, token_cliente, pet_id, vet_solis, _next_weekday(9, 0))
+    _agendar(client, token_cliente, pet_id, vet_luna, _next_weekday(10, 0))
 
-    primer_turno = client.post(
-        "/appointments",
-        json={"pet_id": mascota["id"], "vet_id": 2, "start_at": _inicio(9, 0)},
-        headers=_cabecera(token_ana),
-    )
-    assert primer_turno.status_code == 201
-    segundo_turno = client.post(
-        "/appointments",
-        json={"pet_id": mascota["id"], "vet_id": 2, "start_at": _inicio(10, 0)},
-        headers=_cabecera(token_ana),
-    )
-    assert segundo_turno.status_code == 201
-
-    respuesta = client.get("/appointments", headers=_cabecera(token_vet))
+    respuesta = client.get("/appointments", headers=auth_header(token_solis))
 
     assert respuesta.status_code == 200
     turnos = respuesta.json()
-    assert {turno["id"] for turno in turnos} == {
-        primer_turno.json()["id"],
-        segundo_turno.json()["id"],
-    }
-    assert all(turno["vet_id"] == 2 for turno in turnos)
+    assert len(turnos) == 1
+    assert turnos[0]["vet_id"] == vet_solis
 
 
-def test_el_listado_de_un_cliente_sin_turnos_devuelve_un_arreglo_vacio(
-    client: TestClient,
-) -> None:
-    _, token = _usuario(client, EMAIL_CLIENTE, "client")
-
-    respuesta = client.get("/appointments", headers=_cabecera(token))
-
-    assert respuesta.status_code == 200
-    assert respuesta.json() == []
-
-
-def test_el_listado_sin_token_responde_401(client: TestClient) -> None:
-    respuesta = client.get("/appointments")
-
-    assert respuesta.status_code == 401
-    assert "detail" in respuesta.json()
-
-
-def test_el_listado_con_token_invalido_responde_401(client: TestClient) -> None:
-    respuesta = client.get(
-        "/appointments", headers={"Authorization": "Bearer token.inventado.aaa"}
-    )
-
-    assert respuesta.status_code == 401
-
-
-# --- Cancelación de turnos ----------------------------------------------------
-
-
-def test_el_dueno_de_la_mascota_puede_cancelar_el_turno(client: TestClient) -> None:
-    _usuario(client, EMAIL_CLIENTE, "client")
-    _usuario(client, EMAIL_VETERINARIO, "vet")
-    token = _token(client, EMAIL_CLIENTE)
-    mascota = _crear_mascota(client, token)
-    turno = client.post(
-        "/appointments",
-        json={"pet_id": mascota["id"], "vet_id": 2, "start_at": _inicio(9, 0)},
-        headers=_cabecera(token),
-    )
-    assert turno.status_code == 201
+def test_el_cliente_propietario_cancela_su_turno(client: TestClient) -> None:
+    """El dueño de la mascota cancela el turno y el estado pasa a `cancelled`."""
+    _cliente_id, token_cliente = _registrar_cliente(client, "ana@example.com")
+    vet_id, _token_vet = _registrar_vet(client, "dra.solis@example.com")
+    pet_id = _registrar_mascota(client, token_cliente)
+    inicio = _next_weekday(9, 0)
+    creado = _agendar(client, token_cliente, pet_id, vet_id, inicio).json()
 
     respuesta = client.post(
-        f"/appointments/{turno.json()['id']}/cancel", headers=_cabecera(token)
+        f"/appointments/{creado['id']}/cancel", headers=auth_header(token_cliente)
+    )
+
+    assert respuesta.status_code == 200
+    body = respuesta.json()
+    assert body["status"] == "cancelled"
+    assert body["id"] == creado["id"]
+    assert body["pet_id"] == creado["pet_id"]
+    assert body["vet_id"] == creado["vet_id"]
+    assert body["start_at"] == creado["start_at"]
+    assert body["end_at"] == creado["end_at"]
+
+
+def test_el_veterinario_del_turno_puede_cancelarlo(client: TestClient) -> None:
+    """El veterinario a cargo del turno también puede cancelarlo."""
+    _cliente_id, token_cliente = _registrar_cliente(client, "ana@example.com")
+    vet_id, token_vet = _registrar_vet(client, "dra.solis@example.com")
+    pet_id = _registrar_mascota(client, token_cliente)
+    creado = _agendar(client, token_cliente, pet_id, vet_id, _next_weekday(9, 0)).json()
+
+    respuesta = client.post(
+        f"/appointments/{creado['id']}/cancel", headers=auth_header(token_vet)
     )
 
     assert respuesta.status_code == 200
     assert respuesta.json()["status"] == "cancelled"
 
 
-def test_el_veterinario_asignado_puede_cancelar_el_turno(client: TestClient) -> None:
-    _usuario(client, EMAIL_CLIENTE, "client")
-    _, token_vet = _usuario(client, EMAIL_VETERINARIO, "vet")
-    token_cliente = _token(client, EMAIL_CLIENTE)
-    mascota = _crear_mascota(client, token_cliente)
-    turno = client.post(
-        "/appointments",
-        json={"pet_id": mascota["id"], "vet_id": 2, "start_at": _inicio(9, 0)},
-        headers=_cabecera(token_cliente),
+def test_otro_usuario_no_puede_cancelar_responde_403(client: TestClient) -> None:
+    """Un cliente ajeno y un veterinario sin relación no pueden cancelar el turno."""
+    _cliente_id, token_cliente = _registrar_cliente(client, "ana@example.com")
+    _otro_id, token_otro = _registrar_cliente(client, "bruno@example.com")
+    vet_id, _token_vet = _registrar_vet(client, "dra.solis@example.com")
+    _otro_vet, token_otro_vet = _registrar_vet(client, "dr.luna@example.com")
+    pet_id = _registrar_mascota(client, token_cliente)
+    creado = _agendar(client, token_cliente, pet_id, vet_id, _next_weekday(9, 0)).json()
+
+    por_cliente = client.post(
+        f"/appointments/{creado['id']}/cancel", headers=auth_header(token_otro)
     )
-    assert turno.status_code == 201
-
-    respuesta = client.post(
-        f"/appointments/{turno.json()['id']}/cancel", headers=_cabecera(token_vet)
-    )
-
-    assert respuesta.status_code == 200
-    assert respuesta.json()["status"] == "cancelled"
-
-
-def test_un_usuario_no_relacionado_no_puede_cancelar_el_turno(
-    client: TestClient, sesion_local: sessionmaker[Session]
-) -> None:
-    _usuario(client, EMAIL_CLIENTE, "client")
-    _usuario(client, EMAIL_VETERINARIO, "vet")
-    _usuario(client, EMAIL_OTRO_CLIENTE, "client")
-    token_ana = _token(client, EMAIL_CLIENTE)
-    mascota = _crear_mascota(client, token_ana)
-    turno = client.post(
-        "/appointments",
-        json={"pet_id": mascota["id"], "vet_id": 2, "start_at": _inicio(9, 0)},
-        headers=_cabecera(token_ana),
-    )
-    assert turno.status_code == 201
-
-    respuesta = client.post(
-        f"/appointments/{turno.json()['id']}/cancel",
-        headers=_cabecera(_token(client, EMAIL_OTRO_CLIENTE)),
+    por_veterinario = client.post(
+        f"/appointments/{creado['id']}/cancel", headers=auth_header(token_otro_vet)
     )
 
-    assert respuesta.status_code == 403
-    with sesion_local() as sesion:
-        guardado = sesion.get(Appointment, turno.json()["id"])
-    assert guardado is not None
-    assert guardado.status == "scheduled"
-
-
-def test_cancelar_un_turno_inexistente_responde_404(client: TestClient) -> None:
-    _, token = _usuario(client, EMAIL_CLIENTE, "client")
-
-    respuesta = client.post("/appointments/999999/cancel", headers=_cabecera(token))
-
-    assert respuesta.status_code == 404
-    assert "detail" in respuesta.json()
+    assert por_cliente.status_code == 403
+    assert por_veterinario.status_code == 403
+    turnos = client.get("/appointments", headers=auth_header(token_cliente)).json()
+    assert turnos[0]["status"] == "scheduled"
 
 
 def test_cancelar_un_turno_ya_cancelado_responde_409(client: TestClient) -> None:
-    _usuario(client, EMAIL_CLIENTE, "client")
-    _usuario(client, EMAIL_VETERINARIO, "vet")
-    token = _token(client, EMAIL_CLIENTE)
-    mascota = _crear_mascota(client, token)
-    turno = client.post(
-        "/appointments",
-        json={"pet_id": mascota["id"], "vet_id": 2, "start_at": _inicio(9, 0)},
-        headers=_cabecera(token),
-    )
-    assert turno.status_code == 201
+    """Un turno cancelado no se puede cancelar otra vez."""
+    _cliente_id, token_cliente = _registrar_cliente(client, "ana@example.com")
+    vet_id, _token_vet = _registrar_vet(client, "dra.solis@example.com")
+    pet_id = _registrar_mascota(client, token_cliente)
+    creado = _agendar(client, token_cliente, pet_id, vet_id, _next_weekday(9, 0)).json()
+
     primera = client.post(
-        f"/appointments/{turno.json()['id']}/cancel", headers=_cabecera(token)
+        f"/appointments/{creado['id']}/cancel", headers=auth_header(token_cliente)
     )
-    assert primera.status_code == 200
-
     segunda = client.post(
-        f"/appointments/{turno.json()['id']}/cancel", headers=_cabecera(token)
+        f"/appointments/{creado['id']}/cancel", headers=auth_header(token_cliente)
     )
 
+    assert primera.status_code == 200
     assert segunda.status_code == 409
-    assert "detail" in segunda.json()
+    turnos = client.get("/appointments", headers=auth_header(token_cliente)).json()
+    assert turnos[0]["status"] == "cancelled"
 
 
-def test_el_horario_cancelado_queda_libre(client: TestClient) -> None:
-    _usuario(client, EMAIL_CLIENTE, "client")
-    _usuario(client, EMAIL_VETERINARIO, "vet")
-    token = _token(client, EMAIL_CLIENTE)
-    mascota = _crear_mascota(client, token)
-    inicio = _inicio(9, 0)
-    turno = client.post(
-        "/appointments",
-        json={"pet_id": mascota["id"], "vet_id": 2, "start_at": inicio},
-        headers=_cabecera(token),
-    )
-    assert turno.status_code == 201
-    cancelacion = client.post(
-        f"/appointments/{turno.json()['id']}/cancel", headers=_cabecera(token)
-    )
-    assert cancelacion.status_code == 200
+def test_cancelar_un_turno_inexistente_responde_404(client: TestClient) -> None:
+    """Un identificador de turno desconocido no existe."""
+    _cliente_id, token_cliente = _registrar_cliente(client, "ana@example.com")
 
-    nuevo = client.post(
-        "/appointments",
-        json={"pet_id": mascota["id"], "vet_id": 2, "start_at": inicio},
-        headers=_cabecera(token),
+    respuesta = client.post(
+        "/appointments/999/cancel", headers=auth_header(token_cliente)
     )
 
-    assert nuevo.status_code == 201
-    assert nuevo.json()["status"] == "scheduled"
+    assert respuesta.status_code == 404
 
 
-def test_cancelar_sin_token_responde_401(client: TestClient) -> None:
-    respuesta = client.post("/appointments/1/cancel")
+def test_el_horario_cancelado_vuelve_a_estar_disponible(client: TestClient) -> None:
+    """Un turno cancelado libera el horario para volver a reservarlo."""
+    _cliente_id, token_cliente = _registrar_cliente(client, "ana@example.com")
+    _otro_id, token_otro = _registrar_cliente(client, "bruno@example.com")
+    vet_id, _token_vet = _registrar_vet(client, "dra.solis@example.com")
+    pet_ana = _registrar_mascota(client, token_cliente, "Firulais")
+    pet_bruno = _registrar_mascota(client, token_otro, "Roco")
+    inicio = _next_weekday(9, 0)
+    creado = _agendar(client, token_cliente, pet_ana, vet_id, inicio).json()
+    cancelado = client.post(
+        f"/appointments/{creado['id']}/cancel", headers=auth_header(token_cliente)
+    )
+    assert cancelado.status_code == 200
 
-    assert respuesta.status_code == 401
-    assert "detail" in respuesta.json()
+    reservada = _agendar(client, token_otro, pet_bruno, vet_id, inicio)
 
-
-@pytest.mark.parametrize("metodo", ["get", "post"])
-def test_los_turnos_exigen_autenticacion(client: TestClient, metodo: str) -> None:
-    respuesta = getattr(client, metodo)("/appointments")
-
-    assert respuesta.status_code == 401
+    assert reservada.status_code == 201
+    assert reservada.json()["status"] == "scheduled"

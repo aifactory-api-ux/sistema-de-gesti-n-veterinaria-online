@@ -2,47 +2,40 @@
 
 ## Why
 
-La clínica veterinaria necesita una plataforma backend para que los clientes registran sus mascotas y agendan turnos con veterinarios de forma ordenada y verificable. Hoy no existe ninguna API: el flujo de registro, autenticación y reserva de turnos es manual, lo que impide confirmar la disponibilidad de un veterinario y deja al cliente sin garantía sobre sus citas.
-
-Esta entrega introduce la primera versión funcional de esa plataforma, incluyendo autenticación JWT, catálogo de veterinarios, registro de mascotas y un sistema de turnos con reglas de agenda claras, más un README con ejemplos `curl` y una suite de pruebas automatizadas.
+The clinic has no software behind its front desk: pets, owners and appointment slots live in paper notebooks and phone calls, so nothing prevents two bookings for the same veterinarian at the same time and there is no single place to see the clinic's agenda. A single REST backend that owns accounts, pets and the appointment calendar removes that coordination cost and gives the internal team one place to work from.
 
 ## What Changes
 
-- Se agrega un endpoint público de salud `GET /health` que responde `200 {"status": "ok"}`.
-- Se agrega `POST /auth/register` para crear usuarios con rol `client` o `vet`, con `201 {id, email, role}`, `409` ante email duplicado y `422` ante password menor a 8 caracteres o rol inválido.
-- Se agrega `POST /auth/login` que emite un JWT (`200 {access_token, token_type: "bearer"}`) y responde `401` ante credenciales incorrectas.
-- Se agrega protección por `Authorization: Bearer` en todos los endpoints salvo `GET /health`, `POST /auth/register` y `POST /auth/login`; sin token o con token inválido se responde `401`.
-- Se agrega `GET /vets` que lista los veterinarios registrados como `[{id, email}]`.
-- Se agrega `POST /pets` (solo clientes) con validación de `species` (`dog`, `cat`, `other`) y `birth_date` no futura, devolviendo `201 {id, name, species, birth_date, owner_id}`; se agrega `GET /pets` que devuelve únicamente las mascotas del cliente autenticado.
-- Se agrega `POST /appointments` (solo clientes y solo con mascotas propias) que valida la ventana de agenda (lunes a sábado, 09:00–18:00, inicio en punto o y media, último inicio 17:30, duración 30 minutos, `start_at` en UTC ISO 8601 y nunca en pasado), responde `404` si la mascota o el veterinario no existen, `403` si la mascota es ajena y `409` si el veterinario ya tiene un turno activo en ese horario; devuelve `201 {id, pet_id, vet_id, start_at, end_at, status: "scheduled"}`.
-- Se agrega `GET /appointments` que muestra al cliente los turnos de sus mascotas y al veterinario los turnos asignados a él.
-- Se agrega `POST /appointments/{id}/cancel`, permitido al cliente dueño de la mascota o al veterinario del turno (`403` para terceros), que devuelve el turno con `status: "cancelled"`, responde `409` si ya estaba cancelado y libera el horario para volver a agendar.
-- Se agrega el empaquetado containerizado del proyecto: `Dockerfile` en la raíz del repositorio y `docker-compose.yml` en la raíz del repositorio que levantan la API y su base de datos PostgreSQL.
-- Se agrega una suite de pruebas con `pytest` y un `README.md` con instrucciones de arranque y ejemplos `curl`.
+- Add a REST API for the veterinary clinic backend, implemented with FastAPI and backed by PostgreSQL.
+- Add JWT authentication: clients and veterinarians register with an email, a password and a role, log in for a bearer token, and every endpoint other than health, register and login requires that token.
+- Add a veterinarian directory (`GET /vets`) so a client can pick who to book with.
+- Add a pet registry (`POST /pets`, `GET /pets`) where each client records the pets they own, with a controlled species vocabulary and no future birth date.
+- Add appointment scheduling (`POST /appointments`, `GET /appointments`, `POST /appointments/{id}/cancel`) with 30-minute slots on a fixed grid inside the clinic's working window, no double booking for a veterinarian, and cancellation by the owner or the veterinarian.
+- Add a health endpoint (`GET /health`) for liveness checks.
+- Add the containerized delivery of the project: a root `Dockerfile` and a root `docker-compose.yml` that build and run the API together with its PostgreSQL database.
 
 ## Capabilities
 
 ### New Capabilities
 
-- `service-health`: Exposición de un endpoint de salud público que permite a operadores y a la orquestación de contenedores comprobar que la API está viva.
-- `user-auth`: Registro de usuarios con rol `client` o `vet`, emisión y validación de JWT, y aplicación uniforme de la protección `Authorization: Bearer` en el resto de la API.
-- `vet-directory`: Consulta del directorio de veterinarios disponibles para que los clientes puedan elegir profesional al agendar.
-- `pet-registry`: Registro de mascotas a nombre del cliente autenticado y listado acotado a las mascotas propias.
-- `appointment-scheduling`: Reserva de turnos de 30 minutos con reglas de agenda y zona horaria, listado según el rol del usuario y cancelación con liberación del horario.
-- `container-runtime`: Empaquetado y ejecución containerizada de la API y de su base de datos PostgreSQL mediante `Dockerfile` y `docker-compose.yml` en la raíz del repositorio.
+- `service-health`: liveness endpoint that reports whether the API is up.
+- `user-auth`: registration, login and JWT bearer protection for every non-public endpoint.
+- `vet-directory`: read-only listing of the veterinarians a client can book an appointment with.
+- `pet-registry`: creation and per-owner listing of the pets a client has registered.
+- `appointment-scheduling`: booking, per-role listing and cancellation of 30-minute clinic appointments.
+- `container-delivery`: Dockerfile and root `docker-compose.yml` that build and run the project with its database.
 
 ### Modified Capabilities
 
-Ninguna. No existen capacidades previas en `openspec/specs/`; la entrega es íntegramente nueva.
+None. The project has no capability specs yet, so this change only introduces new ones.
 
 ## Impact
 
-- **Código nuevo**: API REST en FastAPI con capa de acceso a datos sobre PostgreSQL (SQLAlchemy 2.0), modelos de `users`, `pets` y `appointments`, y enrutadores para salud, autenticación, veterinarios, mascotas y turnos.
-- **Dependencias nuevas**: FastAPI, Uvicorn, SQLAlchemy 2.0, driver PostgreSQL, PyJWT, biblioteca de hashing de contraseñas y dependencias de validación.
-- **Contrato HTTP público**: los endpoints `GET /health`, `POST /auth/register`, `POST /auth/login`, `GET /vets`, `POST /pets`, `GET /pets`, `POST /appointments`, `GET /appointments` y `POST /appointments/{id}/cancel` con sus códigos de éxito y de error.
-- **Infraestructura**: `Dockerfile` multi-etapa ligero en la raíz y `docker-compose.yml` en la raíz con servicios de API, PostgreSQL y ejecución de pruebas.
-- **Documentación y calidad**: `README.md` con pasos de arranque y ejemplos `curl`, y suite `pytest` contra una base PostgreSQL real.
-- **Fuera de alcance**: no se requieren integraciones de pago, notificaciones, frontend web, roles de administrador, multi-clínica, ni ficha de historial clínico, porque la solicitud original no los pide.
+- New backend project rooted at the repository root: `app/` (FastAPI application, routers, SQLAlchemy models, JWT security), `tests/` (pytest suite), `requirements.txt`, `Dockerfile`, `docker-compose.yml`, `.env.example` and `README.md`.
+- New runtime dependencies: FastAPI, Uvicorn, SQLAlchemy 2, psycopg 3 (PostgreSQL driver), PyJWT, argon2-cffi, pydantic-settings, plus pytest and httpx for the test suite.
+- New data model persisted in PostgreSQL: users (email, password hash, role), pets (name, species, birth date, owner) and appointments (pet, veterinarian, start, end, status).
+- New public HTTP surface: `GET /health`, `POST /auth/register`, `POST /auth/login`, `GET /vets`, `POST /pets`, `GET /pets`, `POST /appointments`, `GET /appointments`, `POST /appointments/{id}/cancel`.
+- No frontend, no third-party integration, no notification delivery and no deployment beyond the local container setup.
 
 
 <!-- specs/appointment-scheduling/spec.md -->
@@ -50,242 +43,249 @@ Ninguna. No existen capacidades previas en `openspec/specs/`; la entrega es ínt
 
 ## Purpose
 
-Permite que los clientes agenden turnos de 30 minutos con veterinarios concretos bajo reglas de agenda verificables, y que tanto el cliente como el veterinario puedan consultar y cancelar sus turnos.
+Owns the clinic's appointment calendar: which client, which pet, which veterinarian and which slot are reserved, and the rules that keep two bookings from landing on the same veterinarian at the same moment.
 
 ## ADDED Requirements
 
-### Requirement: Reserva de turno para una mascota propia
-El sistema SHALL permitir que un cliente agende un turno mediante `POST /appointments` con `{"pet_id": ..., "vet_id": ..., "start_at": ...}` y SHALL responder con código `201` y cuerpo `{"id": ..., "pet_id": ..., "vet_id": ..., "start_at": ..., "end_at": ..., "status": "scheduled"}`.
+### Requirement: A client books an appointment
 
-#### Scenario: Turno válido agendado
-- **WHEN** el cliente `ana@example.com` con la mascota `Firulais` (`id` = 1) agenda un turno con el veterinario `dra.luz@example.com` (`id` = 2) para el próximo lunes a las `09:00:00` UTC
-- **THEN** la API responde con código `201` y el cuerpo JSON contiene las claves `id`, `pet_id`, `vet_id`, `start_at`, `end_at` y `status`, con `pet_id` igual a `1`, `vet_id` igual a `2` y `status` igual a `scheduled`
+The system SHALL accept `POST /appointments` with a JSON body containing `pet_id`, `vet_id` and `start_at` from a client, SHALL reserve a slot of 30 minutes starting at `start_at`, and SHALL answer HTTP 201 with a JSON body containing `id`, `pet_id`, `vet_id`, `start_at`, `end_at` and `status` equal to `"scheduled"`.
 
-#### Scenario: El turno creado queda asociado a la mascota y al veterinario
-- **WHEN** un turno se agenda correctamente
-- **THEN** el turno persistido referencia el `pet_id` recibido, el `vet_id` recibido y el `owner_id` de la mascota
+#### Scenario: A client books an available slot
 
-### Requirement: Duración fija de 30 minutos
-Todo turno SHALL tener una duración exacta de 30 minutos, de modo que `end_at` sea `start_at` desplazado 30 minutos.
+- **WHEN** a client who owns pet `1` sends `POST /appointments` with `{"pet_id": 1, "vet_id": 7, "start_at": "2026-01-05T09:00:00Z"}` and the veterinarian `7` has no appointment in that slot
+- **THEN** the system responds with HTTP 201
+- **AND** the JSON body contains `id`, `pet_id` equal to `1`, `vet_id` equal to `7` and `status` equal to `scheduled`
+- **AND** `start_at` is `2026-01-05T09:00:00Z` and `end_at` is `2026-01-05T09:30:00Z`
 
-#### Scenario: Cálculo de la hora de fin
-- **WHEN** se agenda un turno con `start_at` igual a `2027-03-01T09:00:00+00:00` o, en cualquier lunes futuro, a las `09:00:00` UTC
-- **THEN** la respuesta `201` contiene `end_at` exactamente 30 minutos después, es decir a las `09:30:00` UTC del mismo día
+### Requirement: Only clients can book appointments
 
-### Requirement: Días de agenda de lunes a sábado
-El sistema SHALL aceptar turnos solo de lunes a sábado (UTC) y SHALL responder con código HTTP `422` cuando `start_at` caiga en domingo.
+The system SHALL answer HTTP 403 when `POST /appointments` is sent by an authenticated veterinarian, and SHALL NOT reserve the slot.
 
-#### Scenario: Turno en domingo
-- **WHEN** se agenda un turno para el próximo domingo a las `09:00:00` UTC
-- **THEN** la API responde con código `422` y no se crea el turno
+#### Scenario: A veterinarian tries to book an appointment
 
-#### Scenario: Turno en sábado
-- **WHEN** se agenda un turno para el próximo sábado a las `10:00:00` UTC
-- **THEN** la API responde con código `201`
+- **WHEN** a veterinarian sends `POST /appointments` with `{"pet_id": 1, "vet_id": 7, "start_at": "2026-01-05T09:00:00Z"}`
+- **THEN** the system responds with HTTP 403
+- **AND** no appointment is created
 
-### Requirement: Ventana horaria de 09:00 a 18:00
-El sistema SHALL aceptar turnos cuyo inicio esté entre las `09:00:00` y las `17:30:00` UTC (de modo que el turno termine antes de las `18:00:00` UTC) y SHALL responder con código HTTP `422` para cualquier inicio fuera de esa ventana.
+### Requirement: An appointment may only use a pet owned by the client
 
-#### Scenario: Inicio antes de las 09:00
-- **WHEN** se agenda un turno para el próximo lunes a las `08:30:00` UTC
-- **THEN** la API responde con código `422` y no se crea el turno
+The system SHALL answer HTTP 403 when `POST /appointments` refers to a pet that exists but is owned by another client, and SHALL NOT reserve the slot.
 
-#### Scenario: Inicio a las 17:30, último inicio permitido
-- **WHEN** se agenda un turno para el próximo lunes a las `17:30:00` UTC
-- **THEN** la API responde con código `201` y `end_at` es el mismo día a las `18:00:00` UTC
+#### Scenario: A client books a pet that belongs to somebody else
 
-#### Scenario: Inicio después de las 17:30
-- **WHEN** se agenda un turno para el próximo lunes a las `18:00:00` UTC
-- **THEN** la API responde con código `422` y no se crea el turno
+- **WHEN** a client sends `POST /appointments` with a `pet_id` registered by a different client
+- **THEN** the system responds with HTTP 403
+- **AND** no appointment is created
 
-### Requirement: Minutos de inicio en punto o y media
-El sistema SHALL exigir que los minutos de `start_at` sean `00` o `30` y SHALL responder con código HTTP `422` ante cualquier otro valor de minutos.
+### Requirement: The pet and the veterinarian of an appointment must exist
 
-#### Scenario: Minutos no alineados a la media hora
-- **WHEN** se agenda un turno para el próximo lunes a las `09:15:00` UTC
-- **THEN** la API responde con código `422` y no se crea el turno
+The system SHALL answer HTTP 404 when `POST /appointments` refers to a `pet_id` that does not exist or to a `vet_id` that is not a registered veterinarian, and SHALL NOT reserve the slot.
 
-#### Scenario: Inicio a y media hora
-- **WHEN** se agenda un turno para el próximo lunes a las `09:30:00` UTC
-- **THEN** la API responde con código `201` y `end_at` es el mismo día a las `10:00:00` UTC
+#### Scenario: Book an appointment for an unknown pet
 
-### Requirement: Formato ISO 8601 en UTC para start_at
-El sistema SHALL aceptar `start_at` en formato ISO 8601 y SHALL interpretarlo y devolverlo en UTC.
+- **WHEN** a client sends `POST /appointments` with `{"pet_id": 999, "vet_id": 7, "start_at": "2026-01-05T09:00:00Z"}`
+- **THEN** the system responds with HTTP 404
 
-#### Scenario: Entrada con desplazamiento horario
-- **WHEN** se agenda un turno con `start_at` igual a `2027-03-01T11:00:00+02:00` o, en cualquier lunes futuro, a las `11:00:00+02:00`
-- **THEN** la API responde con código `201` y devuelve `start_at` en UTC equivalente a las `09:00:00+00:00` de ese mismo día
+#### Scenario: Book an appointment for an unknown veterinarian
 
-#### Scenario: Entrada sin zona horaria
-- **WHEN** se agenda un turno con `start_at` igual a `2027-03-01T09:00:00` sin desplazamiento o, en cualquier lunes futuro, a las `09:00:00` sin desplazamiento
-- **THEN** la API responde con código `201` y devuelve `start_at` en UTC a las `09:00:00+00:00` de ese mismo día
+- **WHEN** a client sends `POST /appointments` with `{"pet_id": 1, "vet_id": 999, "start_at": "2026-01-05T09:00:00Z"}`
+- **THEN** the system responds with HTTP 404
 
-#### Scenario: Entrada que no es una fecha ISO 8601
-- **WHEN** se agenda un turno con `start_at` igual a `mañana a las 9`
-- **THEN** la API responde con código `422` y no se crea el turno
+### Requirement: The start of an appointment must land on the 30 minute grid
 
-### Requirement: El turno no puede estar en el pasado
-El sistema SHALL responder con código HTTP `422` cuando `start_at` sea anterior o igual al instante actual en UTC.
+The system SHALL parse `start_at` of `POST /appointments` as an ISO 8601 timestamp expressed in UTC and SHALL answer HTTP 422 when its minute is neither `00` nor `30`, or when it carries leftover seconds, so that every appointment starts exactly on the hour or on the half hour.
 
-#### Scenario: Fecha ya pasada
-- **WHEN** se agenda un turno con `start_at` igual a `2020-01-01T09:00:00+00:00`
-- **THEN** la API responde con código `422` y no se crea el turno
+#### Scenario: Book an appointment at an off grid minute
 
-### Requirement: Mascota o veterinario inexistente
-El sistema SHALL responder con código HTTP `404` cuando el `pet_id` o el `vet_id` no correspondan a un registro existente.
+- **WHEN** a client sends `POST /appointments` with `"start_at": "2026-01-05T09:15:00Z"`
+- **THEN** the system responds with HTTP 422
+- **AND** no appointment is created
 
-#### Scenario: Mascota inexistente
-- **WHEN** se agenda un turno con `pet_id` igual a `999999` y un `vet_id` existente
-- **THEN** la API responde con código `404` y no se crea el turno
+#### Scenario: Book an appointment with leftover seconds
 
-#### Scenario: Veterinario inexistente
-- **WHEN** se agenda un turno con un `pet_id` propio y `vet_id` igual a `999999`
-- **THEN** la API responde con código `404` y no se crea el turno
+- **WHEN** a client sends `POST /appointments` with `"start_at": "2026-01-05T09:00:30Z"`
+- **THEN** the system responds with HTTP 422
+- **AND** no appointment is created
 
-### Requirement: Solo el dueño de la mascota puede agendar
-El sistema SHALL responder con código HTTP `403` cuando el cliente intente agendar un turno para una mascota que no le pertenece.
+#### Scenario: Book an appointment on the half hour
 
-#### Scenario: Mascota ajena
-- **WHEN** el cliente `bruno@example.com` agenda un turno con el `pet_id` de la mascota `Firulais`, que pertenece a `ana@example.com`
-- **THEN** la API responde con código `403` y no se crea el turno
+- **WHEN** a client sends `POST /appointments` with `"start_at": "2026-01-05T09:30:00Z"`
+- **THEN** the system responds with HTTP 201
+- **AND** `end_at` is `2026-01-05T10:00:00Z`
 
-### Requirement: Solo los clientes agendan turnos
-El endpoint `POST /appointments` SHALL responder con código HTTP `403` cuando el portador del token tiene rol `vet`.
+### Requirement: The start of an appointment must fall inside the clinic's working window
 
-#### Scenario: Veterinario como cliente de un turno
-- **WHEN** un token de rol `vet` se usa en `POST /appointments` con un cuerpo válido
-- **THEN** la API responde con código `403` y no se crea el turno
+The system SHALL answer HTTP 422 when the `start_at` of `POST /appointments` is not a Monday to Saturday, is earlier than 09:00 UTC, or is later than 17:30 UTC, so that the last appointment of the day ends at 18:00 UTC.
 
-### Requirement: Conflicto de horario del veterinario
-El sistema SHALL responder con código HTTP `409` cuando el veterinario ya tenga un turno activo que se solape con el horario solicitado.
+#### Scenario: Book an appointment on a Sunday
 
-#### Scenario: El veterinario ya tiene un turno en ese horario
-- **WHEN** `dra.luz@example.com` ya tiene un turno activo el próximo lunes de `09:00:00` a `09:30:00` UTC y otro cliente agenda un turno para ese mismo veterinary en el mismo horario
-- **THEN** la API responde con código `409` y no se crea el segundo turno
+- **WHEN** a client sends `POST /appointments` with a `start_at` that falls on a Sunday, for example `2026-01-04T09:00:00Z`
+- **THEN** the system responds with HTTP 422
+- **AND** no appointment is created
 
-#### Scenario: El conflicto afecta a cualquier cliente
-- **WHEN** el veterinario ya tiene un turno activo en el horario y el turno duplicado lo agenda el mismo cliente con otra de sus mascotas
-- **THEN** la API responde con código `409` y no se crea el turno duplicado
+#### Scenario: Book an appointment before opening time
 
-#### Scenario: Horarios distintos no entran en conflicto
-- **WHEN** `dra.luz@example.com` tiene un turno activo de `09:00:00` a `09:30:00` UTC y se agenda otro turno con ella el mismo día a las `10:00:00` UTC
-- **THEN** la API responde con código `201`
+- **WHEN** a client sends `POST /appointments` with `"start_at": "2026-01-05T08:30:00Z"`
+- **THEN** the system responds with HTTP 422
+- **AND** no appointment is created
 
-### Requirement: Listado de turnos según el rol
-El endpoint `GET /appointments` SHALL devolver al cliente los turnos de sus propias mascotas y al veterinario los turnos que tiene asignados.
+#### Scenario: Book an appointment after the last start of the day
 
-#### Scenario: El cliente ve los turnos de sus mascotas
-- **WHEN** `ana@example.com` tiene un turno con `Firulais` y `bruno@example.com` tiene un turno con su mascota, y `ana@example.com` envía `GET /appointments`
-- **THEN** la API responde con código `200` y el arreglo contiene únicamente el turno de la mascota de `ana@example.com`
+- **WHEN** a client sends `POST /appointments` with `"start_at": "2026-01-05T18:00:00Z"`
+- **THEN** the system responds with HTTP 422
+- **AND** no appointment is created
 
-#### Scenario: El veterinario ve sus turnos
-- **WHEN** `dra.luz@example.com` tiene dos turnos asignados y `ana@example.com` tiene un turno con ella, y `dra.luz@example.com` envía `GET /appointments`
-- **THEN** la API responde con código `200` y el arreglo contiene los dos turnos asignados a `dra.luz@example.com`
+#### Scenario: Book the last appointment of the day
 
-#### Scenario: El listado exige autenticación
-- **WHEN** se envía `GET /appointments` sin cabecera `Authorization`
-- **THEN** la API responde con código `401`
+- **WHEN** a client sends `POST /appointments` with `"start_at": "2026-01-05T17:30:00Z"`
+- **THEN** the system responds with HTTP 201
+- **AND** `end_at` is `2026-01-05T18:00:00Z`
 
-### Requirement: Cancelación autorizada del turno
-El endpoint `POST /appointments/{id}/cancel` SHALL permitir cancelar el turno al cliente dueño de la mascota y al veterinario asignado, y SHALL responder con código HTTP `403` ante cualquier otro usuario.
+#### Scenario: Book an appointment on a Saturday
 
-#### Scenario: El dueño de la mascota cancela
-- **WHEN** `ana@example.com` cancela un turno de su mascota `Firulais`
-- **THEN** la API responde con código `200` y el turno devuelto tiene `status` igual a `cancelled`
+- **WHEN** a client sends `POST /appointments` with a `start_at` that falls on a Saturday inside the working window
+- **THEN** the system responds with HTTP 201
 
-#### Scenario: El veterinario asignado cancela
-- **WHEN** `dra.luz@example.com` cancela un turno que tiene asignado
-- **THEN** la API responde con código `200` y el turno devuelto tiene `status` igual a `cancelled`
+### Requirement: The start of an appointment must not be in the past
 
-#### Scenario: Usuario no relacionado intenta cancelar
-- **WHEN** `bruno@example.com` cancela un turno de la mascota de `ana@example.com`
-- **THEN** la API responde con código `403` y el turno conserva `status` igual a `scheduled`
+The system SHALL answer HTTP 422 when the `start_at` of `POST /appointments` is earlier than the current moment, so that no appointment can be booked in the past.
 
-#### Scenario: Turno inexistente
-- **WHEN** se envía `POST /appointments/999999/cancel` con un token válido
-- **THEN** la API responde con código `404`
+#### Scenario: Book an appointment on a date that already passed
 
-### Requirement: No se cancela dos veces el mismo turno
-El sistema SHALL responder con código HTTP `409` cuando se intente cancelar un turno que ya está cancelado.
+- **WHEN** a client sends `POST /appointments` with a `start_at` in the previous day
+- **THEN** the system responds with HTTP 422
+- **AND** no appointment is created
 
-#### Scenario: Segundo intento de cancelación
-- **WHEN** un turno ya cancelado por `ana@example.com` es cancelado de nuevo por `ana@example.com`
-- **THEN** la API responde con código `409` y el turno sigue con `status` igual a `cancelled`
+### Requirement: A veterinarian cannot hold two active appointments in the same slot
 
-### Requirement: El horario cancelado queda libre
-Tras cancelar un turno, el mismo horario SHALL quedar disponible para agendar un nuevo turno con el mismo veterinario.
+The system SHALL answer HTTP 409 when `POST /appointments` requests a slot that the veterinarian already holds in an appointment whose status is not `"cancelled"`, and SHALL NOT create the second appointment.
 
-#### Scenario: Reagendar el horario cancelado
-- **WHEN** `ana@example.com` cancela su turno del próximo lunes a las `09:00:00` UTC con `dra.luz@example.com` y a continuación agenda un nuevo turno para esa mascota en ese mismo horario
-- **THEN** la API responde con código `201` y el nuevo turno tiene `status` igual a `scheduled`
+#### Scenario: Two clients book the same veterinarian at the same time
+
+- **WHEN** a veterinarian `7` already has a `"scheduled"` appointment starting at `2026-01-05T09:00:00Z`
+- **AND** another client sends `POST /appointments` with `{"pet_id": 2, "vet_id": 7, "start_at": "2026-01-05T09:00:00Z"}`
+- **THEN** the system responds with HTTP 409
+- **AND** the veterinarian keeps a single appointment in that slot
+
+#### Scenario: Two veterinarians are booked at the same time
+
+- **WHEN** a veterinarian `7` already has a `"scheduled"` appointment starting at `2026-01-05T09:00:00Z`
+- **AND** a client sends `POST /appointments` with `{"pet_id": 2, "vet_id": 8, "start_at": "2026-01-05T09:00:00Z"}`
+- **THEN** the system responds with HTTP 201
+
+### Requirement: The appointment listing is scoped by the role of the caller
+
+The system SHALL expose `GET /appointments` to any authenticated account and SHALL answer HTTP 200 with a JSON array of appointment objects, holding the appointments of the client's own pets for a client and the appointments where the caller is the veterinarian for a veterinarian.
+
+#### Scenario: A client lists the appointments of their own pets
+
+- **WHEN** two clients each own a pet and one of them sends `GET /appointments` with a valid bearer token
+- **THEN** the system responds with HTTP 200
+- **AND** the JSON array holds only the appointments of the pets registered by that client
+
+#### Scenario: A veterinarian lists their own appointments
+
+- **WHEN** a veterinarian sends `GET /appointments` with a valid bearer token
+- **THEN** the system responds with HTTP 200
+- **AND** the JSON array holds only the appointments where that account is the veterinarian
+
+#### Scenario: Each listed appointment carries its booking data
+
+- **WHEN** a client sends `GET /appointments` with a valid bearer token
+- **AND** the client has at least one appointment
+- **THEN** every entry of the JSON array contains `id`, `pet_id`, `vet_id`, `start_at`, `end_at` and `status`
+
+### Requirement: The owner client or the veterinarian of the appointment may cancel it
+
+The system SHALL answer HTTP 200 with the appointment object whose `status` is `"cancelled"` when `POST /appointments/{id}/cancel` is sent by the client who owns the pet of the appointment or by the veterinarian of the appointment, keeping the rest of the appointment unchanged.
+
+#### Scenario: The owner client cancels an appointment
+
+- **WHEN** the client who owns the pet of an appointment sends `POST /appointments/{id}/cancel`
+- **THEN** the system responds with HTTP 200
+- **AND** the JSON body contains `status` equal to `cancelled`
+- **AND** `id`, `pet_id`, `vet_id`, `start_at` and `end_at` are the ones of the cancelled appointment
+
+#### Scenario: The veterinarian of the appointment cancels it
+
+- **WHEN** the veterinarian of an appointment sends `POST /appointments/{id}/cancel`
+- **THEN** the system responds with HTTP 200
+- **AND** the JSON body contains `status` equal to `cancelled`
+
+#### Scenario: A user that owns neither the pet nor the appointment is refused
+
+- **WHEN** a client that does not own the pet of an appointment sends `POST /appointments/{id}/cancel` for an appointment booked with another veterinarian
+- **THEN** the system responds with HTTP 403
+- **AND** the appointment keeps its status `scheduled`
+
+### Requirement: Cancelling an appointment that is already cancelled conflicts
+
+The system SHALL answer HTTP 409 when `POST /appointments/{id}/cancel` is sent for an appointment whose status is already `"cancelled"`, and SHALL answer HTTP 404 when no appointment exists for the given identifier.
+
+#### Scenario: Cancelling twice
+
+- **WHEN** an appointment with status `scheduled` is cancelled and the same identifier is cancelled again
+- **THEN** the second request responds with HTTP 409
+- **AND** the appointment keeps the status `cancelled`
+
+#### Scenario: Cancelling an unknown appointment
+
+- **WHEN** a client sends `POST /appointments/999/cancel`
+- **THEN** the system responds with HTTP 404
+
+### Requirement: A cancelled slot is released for a new booking
+
+The system SHALL allow a slot whose only appointment has the status `"cancelled"` to be booked again, and SHALL treat the cancelled appointment as inactive when it looks for a conflict.
+
+#### Scenario: Booking a slot that was cancelled before
+
+- **WHEN** an appointment of veterinarian `7` starting at `2026-01-05T09:00:00Z` was cancelled
+- **AND** a client sends `POST /appointments` with `{"pet_id": 2, "vet_id": 7, "start_at": "2026-01-05T09:00:00Z"}`
+- **THEN** the system responds with HTTP 201
+- **AND** the new appointment has the status `scheduled`
 
 
-<!-- specs/container-runtime/spec.md -->
+<!-- specs/container-delivery/spec.md -->
 # Spec Delta
 
 ## Purpose
 
-Define la entrega containerizada del proyecto: una imagen de la API construida desde el `Dockerfile` de la raíz y una orquestación con `docker-compose.yml` en la raíz que levanta la API junto con PostgreSQL y ejecuta la suite de pruebas.
+Ships the veterinary clinic backend as a self contained container setup so that the internal team can build and run the API together with its PostgreSQL database from the repository root without installing anything by hand.
 
 ## ADDED Requirements
 
-### Requirement: Dockerfile en la raíz del repositorio
-El repositorio SHALL contener un archivo `Dockerfile` en su directorio raíz que construya una imagen con la API y sus dependencias, y que arranque el servidor HTTP de la aplicación.
+### Requirement: The project builds and runs from the repository root with Docker
 
-#### Scenario: Construcción de la imagen de la API
-- **WHEN** se ejecuta la construcción de la imagen a partir del `Dockerfile` de la raíz del repositorio
-- **THEN** la construcción termina con código de salida `0` y produce una imagen que incluye el código de la aplicación y sus dependencias
+The system SHALL ship a `Dockerfile` at the repository root that builds an image running the FastAPI application, and SHALL ship a `docker-compose.yml` at the repository root that builds that image, starts it together with a PostgreSQL service, and connects the API to that database through a `DATABASE_URL`; every path copied into the image SHALL exist in the repository.
 
-#### Scenario: Arranque del servidor en la imagen
-- **WHEN** se inicia un contenedor generado por ese `Dockerfile`
-- **THEN** el proceso de la API queda escuchando en el puerto `8000` del contenedor
+#### Scenario: The root Dockerfile builds the API image
 
-### Requirement: docker-compose.yml en la raíz del repositorio
-El repositorio SHALL contener un archivo `docker-compose.yml` en su directorio raíz que defina un servicio de PostgreSQL y un servicio de la API, ambos construidos o levantados desde la raíz, de modo que el proyecto se ejecute con un único `docker compose up --build`.
+- **WHEN** the `Dockerfile` at the repository root is inspected
+- **THEN** every source path it copies exists in the repository
+- **AND** the image it produces runs the FastAPI application as its default process
 
-#### Scenario: Levantamiento completo con Compose
-- **WHEN** se ejecuta `docker compose up --build` desde la raíz del repositorio
-- **THEN** los servicios de PostgreSQL y de la API se crean sin errores y la API queda accesible
+#### Scenario: The root compose file starts the API and the database
 
-#### Scenario: La API es alcanzable desde el host
-- **WHEN** la orquestación está levantada y se consulta el endpoint `GET /health` publicado por el servicio de la API
-- **THEN** la respuesta tiene código `200` y el cuerpo JSON `{"status": "ok"}`
+- **WHEN** the `docker-compose.yml` at the repository root is parsed
+- **THEN** it defines an API service that is built from the root `Dockerfile`
+- **AND** it defines a PostgreSQL service that the API service depends on
 
-#### Scenario: La API alcanza a PostgreSQL por el nombre del servicio
-- **WHEN** el servicio de la API registra un usuario mediante `POST /auth/register` dentro de la red de Compose
-- **THEN** la API responde con código `201` porque la base de datos del servicio de PostgreSQL está disponible
+#### Scenario: The API reaches the database through DATABASE_URL
 
-### Requirement: Persistencia de los datos de PostgreSQL
-El servicio de PostgreSQL de Compose SHALL almacenar sus datos en un volumen persistente que sobrevive a la recreación del contenedor.
+- **WHEN** the root `docker-compose.yml` is parsed
+- **THEN** the API service receives a `DATABASE_URL` that points at the PostgreSQL service of that same compose file
 
-#### Scenario: Los datos sobreviven a la recreación del contenedor
-- **WHEN** se registra un usuario a través de la API, se detiene y se vuelve a levantar la orquestación con `docker compose up --build`
-- **THEN** el usuario sigue existiendo en PostgreSQL y un nuevo `POST /auth/login` con sus credenciales responde con código `200`
+#### Scenario: The database keeps its data between runs
 
-### Requirement: La suite de pruebas se ejecuta dentro de la imagen
-La orquestación de Compose SHALL incluir un servicio capaz de ejecutar la suite de pruebas dentro de la imagen construida, y dicho servicio SHALL terminar con código de salida `0` cuando todas las pruebas pasan.
+- **WHEN** the root `docker-compose.yml` is parsed
+- **THEN** the PostgreSQL service stores its data in a named volume
 
-#### Scenario: Ejecución de las pruebas en contenedor
-- **WHEN** se ejecuta `docker compose up --build --abort-on-container-exit --exit-code-from tests` desde la raíz del repositorio
-- **THEN** el comando termina con código de salida `0` y el servicio de pruebas informa que todas las pruebas pasaron
+#### Scenario: The running API stores its data in PostgreSQL
 
-#### Scenario: La suite usa PostgreSQL real
-- **WHEN** el servicio de pruebas se ejecuta contra la base de datos PostgreSQL de la orquestación
-- **THEN** las pruebas de persistencia, como el registro de un usuario y la creación de un turno, se ejecutan sin errores de conexión
-
-### Requirement: Configuración por variables de entorno
-La imagen de la API SHALL obtener su configuración (cadena de conexión a la base de datos, secreto de firma del token y puerto) de variables de entorno, y el `docker-compose.yml` SHALL proporcionarlas al servicio de la API sin incrustar secretos de producción en el repositorio.
-
-#### Scenario: El servicio de la API recibe su configuración
-- **WHEN** la orquestación levanta el servicio de la API
-- **THEN** el servicio se inicia con una cadena de conexión válida y sirve peticiones HTTP
-
-### Requirement: El contenedor no incluye el entorno de desarrollo
-La imagen de la API SHALL incluir únicamente lo necesario para ejecutar la aplicación y SHALL exponer el puerto `8000`.
-
-#### Scenario: La imagen expone el puerto de la aplicación
-- **WHEN** se publica el puerto `8000` del contenedor de la API
-- **THEN** las peticiones HTTP al puerto publicado son atendidas por la API del contenedor
+- **WHEN** the API of the compose stack registers an account through `POST /auth/register` and the client logs in through `POST /auth/login`
+- **THEN** the account is read from and written to the PostgreSQL database of that stack
+- **AND** the account is still present after the API container is restarted
 
 
 <!-- specs/pet-registry/spec.md -->
@@ -293,64 +293,77 @@ La imagen de la API SHALL incluir únicamente lo necesario para ejecutar la apli
 
 ## Purpose
 
-Permite que cada cliente registre las mascotas que son de su propiedad y consulte su propio inventario, de modo que los turnos siempre puedan asociarse a una mascota real de quien agenda.
+Owns the registry of the pets the clinic treats: which client each animal belongs to, and the data every appointment about that animal must refer to.
 
 ## ADDED Requirements
 
-### Requirement: Registro de mascota por el cliente
-El sistema SHALL permitir a un usuario con rol `client` registrar una mascota mediante `POST /pets` con el cuerpo `{"name": ..., "species": ..., "birth_date": ...}` y SHALL responder con código `201` y cuerpo `{"id": ..., "name": ..., "species": ..., "birth_date": ..., "owner_id": ...}`.
+### Requirement: A client registers a pet
 
-#### Scenario: Alta de mascota propia
-- **WHEN** el cliente `ana@example.com` envía `POST /pets` con `{"name": "Firulais", "species": "dog", "birth_date": "2020-05-04"}`
-- **THEN** la API responde con código `201` y el cuerpo JSON con las claves `id`, `name`, `species`, `birth_date` y `owner_id`, con `name` igual a `Firulais`, `species` igual a `dog`, `birth_date` igual a `2020-05-04` y `owner_id` igual al id del cliente `ana@example.com`
+The system SHALL accept `POST /pets` with a JSON body containing `name`, `species` and `birth_date`, where `birth_date` is an ISO calendar date, SHALL attach the pet to the authenticated client as its owner, and SHALL answer HTTP 201 with a JSON body containing `id`, `name`, `species`, `birth_date` and `owner_id`.
 
-#### Scenario: El propietario no puede ser elegido por el cliente
-- **WHEN** el cliente `ana@example.com` envía `POST /pets` con un cuerpo que incluye un `owner_id` distinto al suyo
-- **THEN** la API responde con código `201` y el `owner_id` devuelto es el id del cliente `ana@example.com`
+#### Scenario: A client creates a pet
 
-### Requirement: Especies permitidas
-El sistema SHALL aceptar únicamente los valores de `species` `dog`, `cat` y `other`, y SHALL responder con código HTTP `422` ante cualquier otro valor.
+- **WHEN** a client sends `POST /pets` with `{"name": "Firulais", "species": "dog", "birth_date": "2021-03-15"}`
+- **THEN** the system responds with HTTP 201
+- **AND** the JSON body contains `id`, `name` equal to `Firulais`, `species` equal to `dog` and `birth_date` equal to `2021-03-15`
+- **AND** `owner_id` is the identifier of the authenticated client
 
-#### Scenario: Especie no admitida
-- **WHEN** se envía `POST /pets` con `{"name": "Paco", "species": "hamster", "birth_date": "2021-01-01"}`
-- **THEN** la API responde con código `422` y no se registra la mascota `Paco`
+### Requirement: Only clients can register pets
 
-#### Scenario: Especie `other` admitida
-- **WHEN** se envía `POST /pets` con `{"name": "Paco", "species": "other", "birth_date": "2021-01-01"}`
-- **THEN** la API responde con código `201` y el `species` devuelto es `other`
+The system SHALL answer HTTP 403 when `POST /pets` is sent by an authenticated veterinarian, and SHALL NOT create the pet.
 
-### Requirement: Fecha de nacimiento no futura
-El sistema SHALL responder con código HTTP `422` cuando `birth_date` sea una fecha posterior a la fecha actual del servidor.
+#### Scenario: A veterinarian tries to create a pet
 
-#### Scenario: Fecha de nacimiento en el futuro
-- **WHEN** se envía `POST /pets` con `{"name": "Futura", "species": "cat", "birth_date": "2999-01-01"}`
-- **THEN** la API responde con código `422` y no se registra la mascota `Futura`
+- **WHEN** a veterinarian sends `POST /pets` with `{"name": "Firulais", "species": "dog", "birth_date": "2021-03-15"}`
+- **THEN** the system responds with HTTP 403
+- **AND** the pet is not registered for any owner
 
-#### Scenario: Fecha de nacimiento igual al día actual
-- **WHEN** se envía `POST /pets` con `{"name": "Hoy", "species": "cat", "birth_date": "<fecha actual en UTC>"}`
-- **THEN** la API responde con código `201`
+### Requirement: The species of a pet is limited to dog, cat and other
 
-### Requirement: Solo los clientes registran mascotas
-El endpoint `POST /pets` SHALL responder con código HTTP `403` cuando el portador del token tiene rol `vet`.
+The system SHALL validate the `species` field of `POST /pets` against the values `"dog"`, `"cat"` and `"other"` and SHALL answer HTTP 422 for any other value.
 
-#### Scenario: Veterinario intenta registrar una mascota
-- **WHEN** un token de rol `vet` se usa en `POST /pets` con `{"name": "Rayo", "species": "dog", "birth_date": "2022-02-02"}`
-- **THEN** la API responde con código `403` y no se registra la mascota `Rayo`
+#### Scenario: Create a pet with an unsupported species
 
-### Requirement: Listado acotado a las mascotas propias
-El endpoint `GET /pets` SHALL devolver exclusivamente las mascotas cuyo `owner_id` es el usuario autenticado y SHALL responder con código `200` y un arreglo JSON de objetos de mascota.
+- **WHEN** a client sends `POST /pets` with `{"name": "Roco", "species": "hamster", "birth_date": "2021-03-15"}`
+- **THEN** the system responds with HTTP 422
+- **AND** the pet is not registered
 
-#### Scenario: El cliente ve solo sus mascotas
-- **WHEN** `ana@example.com` registra `Firulais` y `Luna`, existe además la mascota `Rayo` de `bruno@example.com`, y `ana@example.com` envía `GET /pets`
-- **THEN** la API responde con código `200` y el arreglo contiene exactamente las mascotas `Firulais` y `Luna`
+#### Scenario: Create a pet with the species other
 
-#### Scenario: Un cliente sin mascotas
-- **WHEN** `bruno@example.com` no tiene mascotas y envía `GET /pets`
-- **THEN** la API responde con código `200` con un arreglo JSON vacío `[]`
+- **WHEN** a client sends `POST /pets` with `{"name": "Roco", "species": "other", "birth_date": "2021-03-15"}`
+- **THEN** the system responds with HTTP 201
+- **AND** the JSON body contains `species` equal to `other`
 
-#### Scenario: El listado exige autenticación
-- **WHEN** se envía `GET /pets` sin cabecera `Authorization`
-- **THEN** la API responde con código `401`
+### Requirement: The birth date of a pet cannot be in the future
+
+The system SHALL validate the `birth_date` field of `POST /pets` and SHALL answer HTTP 422 when the birth date is later than the current calendar date.
+
+#### Scenario: Create a pet born tomorrow
+
+- **WHEN** a client sends `POST /pets` with a `birth_date` equal to the day after the current date
+- **THEN** the system responds with HTTP 422
+- **AND** the pet is not registered
+
+#### Scenario: Create a pet born today
+
+- **WHEN** a client sends `POST /pets` with a `birth_date` equal to the current date
+- **THEN** the system responds with HTTP 201
+
+### Requirement: The pet listing is scoped to the authenticated client
+
+The system SHALL expose `GET /pets` to any authenticated account and SHALL answer HTTP 200 with a JSON array holding only the pets whose `owner_id` is the identifier of the authenticated account.
+
+#### Scenario: A client lists only their own pets
+
+- **WHEN** two clients each registered a pet and one of them sends `GET /pets` with a valid bearer token
+- **THEN** the system responds with HTTP 200
+- **AND** the JSON array holds exactly the pets registered by that client
+
+#### Scenario: A veterinarian lists pets
+
+- **WHEN** a veterinarian sends `GET /pets` with a valid bearer token
+- **THEN** the system responds with HTTP 200
+- **AND** the JSON array is empty
 
 
 <!-- specs/service-health/spec.md -->
@@ -358,24 +371,25 @@ El endpoint `GET /pets` SHALL devolver exclusivamente las mascotas cuyo `owner_i
 
 ## Purpose
 
-Permite comprobar de forma rápida y sin autenticación que la API de la clínica veterinaria está en ejecución y responde correctamente, tanto desde fuera como desde la orquestación de contenedores.
+Exposes the liveness state of the veterinary clinic backend so the internal team and any container orchestrator can confirm the API is up and serving traffic without authenticating.
 
 ## ADDED Requirements
 
-### Requirement: Endpoint público de salud
-El sistema SHALL exponer el endpoint `GET /health` sin exigir credenciales y SHALL responder con código HTTP `200` y cuerpo JSON `{"status": "ok"}`.
+### Requirement: Health endpoint reports the service status
 
-#### Scenario: Consulta de salud sin cabecera Authorization
-- **WHEN** se envía una petición `GET /health` sin cabecera `Authorization`
-- **THEN** la API responde con código `200` y el cuerpo JSON `{"status": "ok"}`
+The system SHALL expose `GET /health` as a public endpoint that requires no credentials, and SHALL answer every request with HTTP 200 and the JSON body `{"status": "ok"}`.
 
-#### Scenario: Consulta de salud con token Bearer válido
-- **WHEN** se envía una petición `GET /health` con la cabecera `Authorization: Bearer <token válido>`
-- **THEN** la API responde con código `200` y el cuerpo JSON `{"status": "ok"}`
+#### Scenario: Health check without credentials
 
-#### Scenario: El cuerpo de salud solo contiene el estado
-- **WHEN** se consulta `GET /health`
-- **THEN** el cuerpo JSON contiene la clave `status` con el valor `ok` y no expone información de base de datos ni de usuarios
+- **WHEN** a client sends `GET /health` with no `Authorization` header
+- **THEN** the system responds with HTTP 200
+- **AND** the JSON body is exactly `{"status": "ok"}`
+
+#### Scenario: Health check with an invalid token
+
+- **WHEN** a client sends `GET /health` with an invalid or expired bearer token
+- **THEN** the system still responds with HTTP 200
+- **AND** the JSON body is exactly `{"status": "ok"}`
 
 
 <!-- specs/user-auth/spec.md -->
@@ -383,120 +397,140 @@ El sistema SHALL exponer el endpoint `GET /health` sin exigir credenciales y SHA
 
 ## Purpose
 
-Permite que clientes y veterinarios se registren en la plataforma, obtengan un token JWT y que la API aplique un control uniforme de autenticación y de rol sobre el resto de los endpoints.
+Owns the accounts of the clinic's users (clients and veterinarians), the credentials they authenticate with, and the rule that every endpoint other than health, registration and login refuses to serve an unauthenticated or badly signed request.
 
 ## ADDED Requirements
 
-### Requirement: Alta de usuarios con rol client o vet
-El sistema SHALL registrar usuarios mediante `POST /auth/register` con el cuerpo `{"email": ..., "password": ..., "role": ...}`, SHALL aceptar únicamente los roles `client` y `vet`, y SHALL responder con código `201` y cuerpo `{"id": ..., "email": ..., "role": ...}`.
+### Requirement: Registration creates a client or veterinarian account
 
-#### Scenario: Registro exitoso de un cliente
-- **WHEN** se envía `POST /auth/register` con `{"email": "ana@example.com", "password": "secreto123", "role": "client"}`
-- **THEN** la API responde con código `201` y un cuerpo JSON con las claves `id`, `email` y `role` cuyo valor `email` es `ana@example.com` y cuyo valor `role` es `client`
+The system SHALL register an account when `POST /auth/register` receives a JSON body with `email`, `password` and `role`, where `role` is either `"client"` or `"vet"`, SHALL persist it, and SHALL answer with HTTP 201 and a JSON body containing the account's `id`, `email` and `role`.
 
-#### Scenario: Registro exitoso de un veterinario
-- **WHEN** se envía `POST /auth/register` con `{"email": "dra.luz@example.com", "password": "secreto123", "role": "vet"}`
-- **THEN** la API responde con código `201` y un cuerpo JSON con las claves `id`, `email` y `role` cuyo valor `email` es `dra.luz@example.com` y cuyo valor `role` es `vet`
+#### Scenario: Register a client
 
-#### Scenario: El email se normaliza a minúsculas
-- **WHEN** se envía `POST /auth/register` con `{"email": "Ana@Example.com", "password": "secreto123", "role": "client"}`
-- **THEN** la API responde con código `201` y el `email` devuelto es `ana@example.com`
+- **WHEN** a client sends `POST /auth/register` with `{"email": "ana@example.com", "password": "secreto123", "role": "client"}`
+- **THEN** the system responds with HTTP 201
+- **AND** the JSON body contains `id`, `email` equal to `ana@example.com` and `role` equal to `client`
 
-### Requirement: Email duplicado rechazado
-El sistema SHALL responder con código HTTP `409` cuando el email registrado ya existe, sin crear un usuario adicional ni devolver el `id` de un usuario existente.
+#### Scenario: Register a veterinarian
 
-#### Scenario: Segundo registro con el mismo email
-- **WHEN** ya existe el usuario `ana@example.com` y se envía `POST /auth/register` con `{"email": "ana@example.com", "password": "otraClave9", "role": "vet"}`
-- **THEN** la API responde con código `409` y el número de usuarios con email `ana@example.com` sigue siendo uno
+- **WHEN** a client sends `POST /auth/register` with `{"email": "dra.solis@example.com", "password": "secreto123", "role": "vet"}`
+- **THEN** the system responds with HTTP 201
+- **AND** the JSON body contains `id`, `email` equal to `dra.solis@example.com` and `role` equal to `vet`
 
-### Requirement: Contraseña mínima de 8 caracteres
-El sistema SHALL rechazar con código HTTP `422` cualquier registro cuya contraseña tenga menos de 8 caracteres.
+#### Scenario: Registration response never leaks the password
 
-#### Scenario: Contraseña demasiado corta
-- **WHEN** se envía `POST /auth/register` con `{"email": "corto@example.com", "password": "corta7", "role": "client"}` (6 caracteres)
-- **THEN** la API responde con código `422` y no se crea el usuario `corto@example.com`
+- **WHEN** a registration succeeds
+- **THEN** the JSON body contains no `password` field and no password hash
 
-#### Scenario: Contraseña de exactamente 8 caracteres
-- **WHEN** se envía `POST /auth/register` con `{"email": "ocho@example.com", "password": "12345678", "role": "client"}`
-- **THEN** la API responde con código `201`
+### Requirement: Registration rejects a role outside client and vet
 
-### Requirement: Rol inválido rechazado
-El sistema SHALL responder con código HTTP `422` cuando el `role` no sea exactamente `client` ni `vet`.
+The system SHALL validate the `role` field of `POST /auth/register` and SHALL answer HTTP 422 when the role is neither `"client"` nor `"vet"`.
 
-#### Scenario: Rol fuera del catálogo
-- **WHEN** se envía `POST /auth/register` con `{"email": "admin@example.com", "password": "secreto123", "role": "admin"}`
-- **THEN** la API responde con código `422` y no se crea el usuario `admin@example.com`
+#### Scenario: Register with an unknown role
 
-#### Scenario: Rol ausente
-- **WHEN** se envía `POST /auth/register` con `{"email": "sinrol@example.com", "password": "secreto123"}`
-- **THEN** la API responde con código `422`
+- **WHEN** a client sends `POST /auth/register` with `{"email": "admin@example.com", "password": "secreto123", "role": "admin"}`
+- **THEN** the system responds with HTTP 422
+- **AND** no account is created for that email
 
-### Requirement: Emisión de token de acceso en el inicio de sesión
-El sistema SHALL autenticar mediante `POST /auth/login` con `{"email": ..., "password": ...}` y SHALL responder con código `200` y cuerpo `{"access_token": ..., "token_type": "bearer"}` conteniendo un JWT firmado.
+### Requirement: Registration rejects a password shorter than eight characters
 
-#### Scenario: Inicio de sesión con credenciales correctas
-- **WHEN** se envía `POST /auth/login` con `{"email": "ana@example.com", "password": "secreto123"}` para un usuario existente
-- **THEN** la API responde con código `200`, con `token_type` igual a `bearer` y con un `access_token` no vacío
+The system SHALL validate the `password` field of `POST /auth/register` and SHALL answer HTTP 422 when the password has fewer than 8 characters, while accepting a password of exactly 8 characters.
 
-#### Scenario: El token identifica al usuario y su rol
-- **WHEN** se inicia sesión con las credenciales del veterinarian `dra.luz@example.com` y luego se usa el `access_token` devuelto en un endpoint protegido
-- **THEN** la API reconoce al portador como el usuario `dra.luz@example.com` con rol `vet`
+#### Scenario: Register with a seven character password
 
-### Requirement: Credenciales incorrectas en el inicio de sesión
-El sistema SHALL responder con código HTTP `401` cuando el email no exista o la contraseña no coincida, sin revelar cuál de los dos datos falló.
+- **WHEN** a client sends `POST /auth/register` with `{"email": "corto@example.com", "password": "1234567", "role": "client"}`
+- **THEN** the system responds with HTTP 422
+- **AND** no account is created for that email
 
-#### Scenario: Contraseña incorrecta
-- **WHEN** se envía `POST /auth/login` con `{"email": "ana@example.com", "password": "claveMala1"}` para un usuario existente
-- **THEN** la API responde con código `401` y no devuelve `access_token`
+#### Scenario: Register with an eight character password
 
-#### Scenario: Email inexistente
-- **WHEN** se envía `POST /auth/login` con `{"email": "nadie@example.com", "password": "secreto123"}`
-- **THEN** la API responde con código `401` y no devuelve `access_token`
+- **WHEN** a client sends `POST /auth/register` with `{"email": "ocho@example.com", "password": "12345678", "role": "client"}`
+- **THEN** the system responds with HTTP 201
 
-### Requirement: Protección por Authorization Bearer
-Todo endpoint distinto de `GET /health`, `POST /auth/register` y `POST /auth/login` SHALL exigir la cabecera `Authorization: Bearer <token>` y SHALL responder con código HTTP `401` si falta la cabecera, si el esquema no es `Bearer`, si el token es inválido o si el token ha expirado.
+### Requirement: Registration rejects a duplicated email
 
-#### Scenario: Petición sin cabecera Authorization
-- **WHEN** se envía `GET /pets` sin cabecera `Authorization`
-- **THEN** la API responde con código `401`
+The system SHALL answer HTTP 409 when `POST /auth/register` receives an email that is already registered, and SHALL leave the existing account untouched.
 
-#### Scenario: Token con firma inválida
-- **WHEN** se envía `GET /pets` con la cabecera `Authorization: Bearer token.inventado.aaa`
-- **THEN** la API responde con código `401`
+#### Scenario: Register the same email twice
 
-#### Scenario: Token expirado
-- **WHEN** se envía `GET /pets` con un `access_token` expirado en la cabecera `Authorization: Bearer`
-- **THEN** la API responde con código `401`
+- **WHEN** an account is registered with `{"email": "ana@example.com", "password": "secreto123", "role": "client"}`
+- **AND** `POST /auth/register` is sent again with `{"email": "ana@example.com", "password": "otraclave", "role": "vet"}`
+- **THEN** the second request responds with HTTP 409
+- **AND** the existing account keeps its original role `client` and its original password
 
-#### Scenario: Esquema de autorización distinto de Bearer
-- **WHEN** se envía `GET /pets` con la cabecera `Authorization: Basic dXNlcjpwYXNz`
-- **THEN** la API responde con código `401`
+### Requirement: Login returns a bearer access token
 
-#### Scenario: Petición con token válido
-- **WHEN** se envía `GET /pets` con la cabecera `Authorization: Bearer <access_token de un cliente válido>`
-- **THEN** la API NO responde con código `401` y procesa la consulta del cliente autenticado
+The system SHALL answer `POST /auth/login` with HTTP 200 and a JSON body containing `access_token` and `token_type` equal to `"bearer"` when the credentials match an existing account, and SHALL issue the `access_token` as a signed JSON Web Token that carries the account's identity and role.
 
-### Requirement: Autorización por rol
-Los endpoints reservados a clientes SHALL responder con código HTTP `403` cuando el portador del token tiene rol `vet`.
+#### Scenario: Login with valid credentials
 
-#### Scenario: Veterinario intenta registrar una mascota
-- **WHEN** se envía `POST /pets` con `{"name": "Firulais", "species": "dog", "birth_date": "2020-05-04"}` usando un token de rol `vet`
-- **THEN** la API responde con código `403` y no se crea la mascota
+- **WHEN** a client sends `POST /auth/login` with `{"email": "ana@example.com", "password": "secreto123"}` for a registered account
+- **THEN** the system responds with HTTP 200
+- **AND** the JSON body contains `token_type` equal to `bearer`
+- **AND** `access_token` is a JSON Web Token made of three dot separated segments
 
-#### Scenario: Veterinario intenta agendar un turno
-- **WHEN** se envía `POST /appointments` con un token de rol `vet` y un cuerpo válido
-- **THEN** la API responde con código `403` y no se crea el turno
+#### Scenario: Login token authenticates a protected endpoint
 
-### Requirement: El material de la contraseña nunca se expone
-Ninguna respuesta de la API SHALL incluir la contraseña en texto plano ni su valor derivado, y el sistema SHALL almacenar las contraseñas de forma irreversible (hash con sal).
+- **WHEN** a client logs in successfully and then sends `GET /vets` with the header `Authorization: Bearer <access_token>`
+- **THEN** the system does not answer with HTTP 401
+- **AND** the request is served as the account that logged in
 
-#### Scenario: El registro no devuelve material de contraseña
-- **WHEN** se registra un usuario correctamente con `POST /auth/register`
-- **THEN** el cuerpo de la respuesta `201` no contiene las claves `password` ni `password_hash`
+### Requirement: Login rejects incorrect credentials
 
-#### Scenario: El inicio de sesión no devuelve material de contraseña
-- **WHEN** se inicia sesión correctamente con `POST /auth/login`
-- **THEN** el cuerpo de la respuesta `200` no contiene las claves `password` ni `password_hash`
+The system SHALL answer HTTP 401 when `POST /auth/login` receives a password that does not match the account, and SHALL answer HTTP 401 when no account exists for the submitted email.
+
+#### Scenario: Login with a wrong password
+
+- **WHEN** a client sends `POST /auth/login` with `{"email": "ana@example.com", "password": "incorrecta"}`
+- **THEN** the system responds with HTTP 401
+
+#### Scenario: Login with an unknown email
+
+- **WHEN** a client sends `POST /auth/login` with `{"email": "nadie@example.com", "password": "secreto123"}`
+- **THEN** the system responds with HTTP 401
+
+### Requirement: Every other endpoint requires a valid bearer token
+
+The system SHALL require an `Authorization: Bearer <access_token>` header on `GET /vets`, `POST /pets`, `GET /pets`, `POST /appointments`, `GET /appointments` and `POST /appointments/{id}/cancel`, and SHALL answer HTTP 401 when the header is absent, malformed, carries an invalid token, or carries a token whose signature does not verify.
+
+#### Scenario: Protected endpoint without an Authorization header
+
+- **WHEN** a client sends `GET /pets` with no `Authorization` header
+- **THEN** the system responds with HTTP 401
+
+#### Scenario: Protected endpoint with a malformed Authorization header
+
+- **WHEN** a client sends `GET /appointments` with the header `Authorization: Basic abc123`
+- **THEN** the system responds with HTTP 401
+
+#### Scenario: Protected endpoint with an unknown token
+
+- **WHEN** a client sends `GET /vets` with the header `Authorization: Bearer token.inventado`
+- **THEN** the system responds with HTTP 401
+
+#### Scenario: Protected endpoint with a token signed by another key
+
+- **WHEN** a client sends `GET /pets` with a structurally valid bearer token signed with a different secret
+- **THEN** the system responds with HTTP 401
+
+#### Scenario: Public endpoints stay reachable without a token
+
+- **WHEN** a client sends `GET /health`, `POST /auth/register` or `POST /auth/login` without an `Authorization` header
+- **THEN** none of those requests is answered with HTTP 401
+
+### Requirement: Passwords are stored as salted hashes
+
+The system SHALL store only a salted hash of the submitted password, SHALL never store or return the plaintext password, and SHALL compare a login attempt against the stored hash.
+
+#### Scenario: Stored credential differs from the submitted password
+
+- **WHEN** an account is registered with the password `secreto123` and the persisted user record is inspected
+- **THEN** the stored password value is not equal to `secreto123`
+
+#### Scenario: Login is checked against the stored hash
+
+- **WHEN** a client logs in with the correct email and the correct password
+- **THEN** the system responds with HTTP 200
 
 
 <!-- specs/vet-directory/spec.md -->
@@ -504,189 +538,186 @@ Ninguna respuesta de la API SHALL incluir la contraseña en texto plano ni su va
 
 ## Purpose
 
-Permite que un cliente autenticado consulte el directorio de veterinarios disponibles para saber a quién puede agendar un turno.
+Publishes the directory of veterinarians available at the clinic so that a client who books an appointment can look up the identifier of the veterinarian to book with.
 
 ## ADDED Requirements
 
-### Requirement: Listado de veterinarios
-El sistema SHALL exponer el endpoint `GET /vets` y SHALL responder con código `200` y un arreglo JSON de objetos `{"id": ..., "email": ...}`, uno por cada usuario con rol `vet`, sin incluir clientes ni campos adicionales.
+### Requirement: The veterinarian directory lists every veterinarian
 
-#### Scenario: Directorio con veterinarios registrados
-- **WHEN** existen los veterinarios `dra.luz@example.com` y `dr.carlos@example.com` y se envía `GET /vets` con un token válido
-- **THEN** la API responde con código `200` y el arreglo contiene dos elementos con las claves `id` y `email` y con los emails `dra.luz@example.com` y `dr.carlos@example.com`
+The system SHALL expose `GET /vets` to any authenticated account and SHALL answer HTTP 200 with a JSON array holding one entry per account whose role is `"vet"`, where each entry contains that account's `id` and `email`.
 
-#### Scenario: Los clientes no aparecen en el directorio
-- **WHEN** existe el cliente `ana@example.com` y se envía `GET /vets` con un token válido
-- **THEN** la API responde con código `200` y ninguno de los elementos devueltos tiene el email `ana@example.com`
+#### Scenario: An authenticated client lists the veterinarians
 
-#### Scenario: Directorio sin veterinarios
-- **WHEN** no existe ningún usuario con rol `vet` y se envía `GET /vets` con un token válido
-- **THEN** la API responde con código `200` y con un arreglo JSON vacío `[]`
+- **WHEN** a client sends `GET /vets` with a valid bearer token and two veterinarian accounts exist
+- **THEN** the system responds with HTTP 200
+- **AND** the JSON body is an array with one entry per veterinarian
+- **AND** each entry contains `id` and `email` and no other account data
 
-### Requirement: El directorio exige autenticación
-El endpoint `GET /vets` SHALL exigir la cabecera `Authorization: Bearer <token>` y SHALL responder con código HTTP `401` cuando falte o sea inválida.
+#### Scenario: Only veterinarians are listed
 
-#### Scenario: Consulta del directorio sin token
-- **WHEN** se envía `GET /vets` sin cabecera `Authorization`
-- **THEN** la API responde con código `401`
+- **WHEN** a client sends `GET /vets` with a valid bearer token while a client account also exists
+- **THEN** the JSON array contains no entry for the client account
 
-#### Scenario: Consulta del directorio con token inválido
-- **WHEN** se envía `GET /vets` con la cabecera `Authorization: Bearer token.inventado.aaa`
-- **THEN** la API responde con código `401`
+#### Scenario: The directory is empty when there are no veterinarians
+
+- **WHEN** a client sends `GET /vets` with a valid bearer token and no veterinarian account exists
+- **THEN** the system responds with HTTP 200
+- **AND** the JSON body is an empty array
 
 
 # Design
 
 ## Context
 
-El repositorio está vacío salvo la estructura de OpenSpec (`openspec/`) y no existe código de aplicación previo. La primera entrega debe ser autocontenida: API REST con FastAPI, persistencia en PostgreSQL, autenticación JWT, suite de pruebas con `pytest` y empaquetado containerizado.
+The repository is empty: no application code, no dependency manifest, no container files. The delivery must be a backend-only project (FastAPI + PostgreSQL) with an automated pytest suite that the internal clinic team can run without any external service, and it must also be runnable as containers from the repository root.
 
-Restricciones que vienen de la solicitud original y que condicionan el diseño:
+Two environment facts shape the approach:
 
-- Los códigos de estado y los cuerpos de respuesta están fijados por la solicitud (`200`, `201`, `401`, `403`, `404`, `409`, `422`).
-- `start_at` es UTC ISO 8601 y la agenda funciona de lunes a sábado, de `09:00` a `18:00`, con turnos de 30 minutos que empiezan en punto o y media.
-- El proyecto siempre se entrega containerizado: `Dockerfile` y `docker-compose.yml` en la raíz del repositorio.
-- El equipo es solo el agente Developer (sin QA ni DevSec): las pruebas las escribe el Developer y cada grupo de tareas entrega sus propias pruebas.
+- The delivery environment has no Docker daemon and no PostgreSQL server installed, so the automated test suite cannot depend on a running database container or a local PostgreSQL instance.
+- The only consumer is the clinic's internal team, so the API is a single service with a small, well-known surface (ten endpoints) and no frontend, no external integration and no multi-tenant concern.
 
-Ver `proposal.md` para la motivación y `specs/` para el contrato de comportamiento.
+See `proposal.md` for the motivation and `specs/` for the behavior that is being implemented.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- Implementar todos los endpoints y códigos de estado definidos en las specs, sin desviaciones.
-- Separar la lógica de negocio comprobable (reglas de agenda, hash de contraseñas, emisión/validación de token) del enrutamiento HTTP para que sea testeable de forma aislada.
-- Que la suite de pruebas se ejecute de verdad contra PostgreSQL dentro del contenedor, de modo que la entrega se pueda verificar con `docker compose up --build`.
-- Entregar el `README.md` con arranque y ejemplos `curl` de cada endpoint.
+- A layered FastAPI application that can be read endpoint by endpoint, with one router module per resource area.
+- One persistence layer that speaks PostgreSQL in the delivered containers and a portable, dependency-free database in the test suite, without duplicating query code.
+- Deterministic, timezone-safe handling of appointment instants, because every scheduling rule (grid, working window, past check) is an instant comparison.
+- A container setup that starts the API and its database with a single command from the repository root.
+- A test suite that runs with `pytest` alone, with no Docker daemon and no external service.
 
 **Non-Goals:**
 
-- Interfaz web, roles de administrador, notificaciones, pagos, multi-clínica e historial clínico: no están solicitados.
-- Migraciones versionadas (Alembic): la entrega inicial crea el esquema al arrancar; se documenta como límite aceptado.
-- Rate limiting, CORS, refresh tokens y revocación de tokens: fuera de la solicitud actual.
+- No frontend, no admin panel, no email or SMS notifications, no payments, no file uploads.
+- No refresh tokens, no password reset flow, no email verification, no rate limiting, no multi-tenant isolation.
+- No schema migration tooling (Alembic) and no production seed data beyond what the API itself creates.
+- No horizontal scaling, no caching layer, no message queue, no background scheduler.
 
 ## Decisions
 
-### 1. Estructura de archivos
+### 1. Project layout
 
-Todo el código vive bajo la raíz del repositorio. Los paths exactos a crear son:
+All application code lives in the `app/` package, all tests in `tests/`, and the container and documentation files at the repository root. Exact paths to create:
 
-| Path | Contenido |
-| --- | --- |
-| `/app/__init__.py` | Paquete de la aplicación. |
-| `/app/main.py` | Punto de entrada: instancia FastAPI, incluye los routers, crea el esquema en el arranque, expone `GET /health`. |
-| `/app/config.py` | Settings con `pydantic-settings`: `DATABASE_URL`, `JWT_SECRET`, `JWT_ALGORITHM`, `JWT_EXPIRE_MINUTES`, `TEST_DATABASE_URL`, `PORT`. |
-| `/app/database.py` | Engine SQLAlchemy, `SessionLocal`, `Base`, `get_db` y creación del esquema. |
-| `/app/models.py` | Modelos ORM `User`, `Pet`, `Appointment`. |
-| `/app/schemas.py` | Modelos Pydantic de entrada y salida (`UserCreate`, `UserPublic`, `Token`, `PetCreate`, `PetPublic`, `VetPublic`, `AppointmentCreate`, `AppointmentPublic`). |
-| `/app/security.py` | Hash y verificación de contraseñas, emisión y decodificación del JWT. |
-| `/app/dependencies.py` | Dependencias FastAPI: `get_current_user` (401), `require_client` (403), `require_vet` (403). |
-| `/app/services/__init__.py` | Paquete de servicios de dominio. |
-| `/app/services/scheduling.py` | Reglas de agenda en funciones puras: `SLOT_MINUTES`, `OPEN_HOUR`, `LAST_START_MINUTE`, `validate_slot`, `overlaps`. |
-| `/app/routers/__init__.py` | Paquete de routers. |
-| `/app/routers/health.py` | `GET /health`. |
-| `/app/routers/auth.py` | `POST /auth/register`, `POST /auth/login`. |
-| `/app/routers/vets.py` | `GET /vets`. |
-| `/app/routers/pets.py` | `POST /pets`, `GET /pets`. |
-| `/app/routers/appointments.py` | `POST /appointments`, `GET /appointments`, `POST /appointments/{id}/cancel`. |
-| `/app/errors.py` | Helpers de error: `conflict()`, `forbidden()`, `unauthorized()` con cuerpo `{"detail": ...}` consistente. |
-| `/tests/__init__.py` | Paquete de pruebas. |
-| `/tests/conftest.py` | Fixtures: base de datos de pruebas, sesión limpia, `client`, `client_user`, `vet_user`, `auth_headers`. |
-| `/tests/test_health.py` | Pruebas del endpoint de salud. |
-| `/tests/test_auth.py` | Pruebas de registro, login y protección Bearer. |
-| `/tests/test_vets.py` | Pruebas del directorio de veterinarios. |
-| `/tests/test_pets.py` | Pruebas de registro y listado de mascotas. |
-| `/tests/test_appointments.py` | Pruebas de reserva, listado, conflictos y cancelación. |
-| `/requirements.txt` | Dependencias de ejecución. |
-| `/requirements-dev.txt` | Dependencias de desarrollo (`pytest`, `httpx`). |
-| `/pyproject.toml` | Configuración de `pytest` y metadatos del proyecto. |
-| `/Dockerfile` | Imagen de la API. |
-| `/docker-compose.yml` | Orquestación de `db`, `api` y `tests`. |
-| `/.dockerignore` | Exclusiones del contexto de build. |
-| `/.env.example` | Plantilla de variables de entorno. |
-| `/README.md` | Arranque local y con Docker, y ejemplos `curl`. |
+```
+app/__init__.py
+app/main.py
+app/config.py
+app/database.py
+app/models.py
+app/schemas.py
+app/security.py
+app/dependencies.py
+app/routers/__init__.py
+app/routers/health.py
+app/routers/auth.py
+app/routers/vets.py
+app/routers/pets.py
+app/routers/appointments.py
+tests/__init__.py
+tests/conftest.py
+tests/test_health.py
+tests/test_auth.py
+tests/test_vets.py
+tests/test_pets.py
+tests/test_appointments.py
+requirements.txt
+requirements-dev.txt
+pytest.ini
+.env.example
+.dockerignore
+Dockerfile
+docker-compose.yml
+README.md
+```
 
-### 2. Stack de aplicación
+`app/main.py` builds the FastAPI application and includes one router per resource area; `app/routers/` holds only the HTTP concerns (path, status code, dependency wiring); `app/models.py` holds the SQLAlchemy tables; `app/schemas.py` holds the Pydantic request and response models; `app/security.py` holds password hashing and JWT issuing/verification; `app/dependencies.py` holds the reusable FastAPI dependencies (current user, client-only guard).
 
-FastAPI con SQLAlchemy 2.0 en modo síncrono y driver `psycopg` (v3) para PostgreSQL.
+Alternative considered: a single `app/main.py` with every endpoint inline. Rejected because the ten endpoints plus the authorization rules would make one file the only place to look, and the security helpers would be tangled with the route bodies.
 
-**Por qué síncrono:** el conjunto de operaciones (alta de usuario, validación de turno, insert) son cortas y no hay I/O remoto de alta latencia; el modo síncrono evita el acoplamiento de `asyncpg`/`await` y simplifica las transacciones y las fixtures de `pytest`. Se elige sobre SQLAlchemy asíncrono + `asyncpg` porque no aporta rendimiento en esta carga y complica la gestión de sesiones en los tests. Se elige sobre SQLAlchemy síncrono + `psycopg2` porque `psycopg` v3 es el driver soportado oficialmente por PostgreSQL desde 2022.
+### 2. Synchronous SQLAlchemy 2.0 with psycopg 3
 
-### 3. Modelo de datos
+The data layer is SQLAlchemy 2.0 ORM (`DeclarativeBase`, `Mapped`, `mapped_column`) on a **synchronous** engine. The PostgreSQL URL is `postgresql+psycopg://...` (psycopg 3 driver) and the test URL is `sqlite://` (in-memory).
 
-- `users`: `id` (PK), `email` (UNIQUE, normalizado a minúsculas), `password_hash`, `role` (`client` | `vet`), `created_at`.
-- `pets`: `id` (PK), `name`, `species` (`dog` | `cat` | `other`), `birth_date` (DATE), `owner_id` (FK `users.id`), `created_at`.
-- `appointments`: `id` (PK), `pet_id` (FK `pets.id`), `vet_id` (FK `users.id`), `start_at` (TIMESTAMPTZ), `end_at` (TIMESTAMPTZ), `status` (`scheduled` | `cancelled`), `created_at`.
+Rationale: the delivery environment has neither a Docker daemon nor a PostgreSQL server, so the suite must run against an embedded database; using one ORM and one URL scheme for both environments keeps a single set of queries and models, and the difference stays confined to `DATABASE_URL`. Sync SQLAlchemy also removes the need for `greenlet`/`asyncpg`/`aiosqlite` and lets every endpoint be a plain `def`, which is the simplest correct thing for a read/write workload of this size.
 
-Se añade un índice único parcial `UNIQUE (vet_id, start_at) WHERE status = 'scheduled'` que impide a nivel de base de datos dos turnos activos del mismo veterinario en el mismo horario. La comprobación de solapamiento se hace en la capa de aplicación y el índice actúa como red de seguridad: ante `IntegrityError` la API responde `409`.
+Alternatives considered: async SQLAlchemy with `asyncpg` (rejected: more moving parts and a second set of session semantics for no measurable benefit here); a raw `psycopg` repository layer without an ORM (rejected: hand-written SQL for three tables would duplicate the model's uniqueness and foreign-key guarantees); SQLite everywhere including production (rejected: the request mandates PostgreSQL).
 
-**Por qué índice parcial y no una columna `is_active`:** el requisito de "un horario cancelado queda libre para volver a agendarse" se traduce directamente en un índice que solo cubre filas `scheduled`, de modo que la cancelación libera el horario sin pasos extra de limpieza.
+### 3. Schema creation without a migration tool
 
-### 4. Autenticación y autorización
+`app/main.py` creates the tables on startup through `Base.metadata.create_all()`, and `app/database.py` exposes the engine and the session factory. The three tables are small and the delivery is the initial schema, so a migration tool would add a dependency and a directory of files that cannot be exercised in an environment without a PostgreSQL server.
 
-- Contraseñas con `pwdlib` sobre Argon2 (`argon2-cffi`), hash con sal por usuario. Se descarta `passlib` + `bcrypt` por su historial de incompatibilidades con las versiones modernas de `bcrypt`.
-- JWT firmado con `HS256` usando `PyJWT`. Claims: `sub` (id de usuario), `role`, `exp`, `iat`. `token_type` de la respuesta de login es siempre `bearer`.
-- Dependencia `get_current_user` construida sobre `HTTPBearer(auto_error=False)`: con `auto_error=True` FastAPI respondería `403` en vez de `401` cuando falta la cabecera, y la solicitud exige `401`. El error se emite con `HTTPException(401, headers={"WWW-Authenticate": "Bearer"})`.
-- `require_client` y `require_vet` devuelven `403` cuando el rol no corresponde. Se aplica sobre `POST /pets` y `POST /appointments` (solo clientes).
+Alternative considered: Alembic. Deferred to the first change that modifies an existing table; it would not alter any behavior in `specs/`.
 
-**Por qué 403 y no 404 para "mascota ajena":** la especificación distingue explícitamente `403` (la mascota existe pero pertenece a otro usuario) de `404` (la mascota no existe), por lo que la comprobación de existencia se ejecuta antes que la de propiedad.
+### 4. Password hashing with argon2 and tokens with PyJWT
 
-### 5. Validación de la agenda
+`app/security.py` hashes passwords with `argon2.PasswordHasher` (per-password salt, encoded hash) and issues HS256 JSON Web Tokens with PyJWT. The token payload carries the user identifier under `sub`, the role, an `iat` and an `exp`. `JWT_SECRET` and `ACCESS_TOKEN_EXPIRE_MINUTES` come from the environment through `app/config.py`; the secret has a development default that the container overrides.
 
-`app/services/scheduling.py` concentra las reglas en funciones puras, sin acceso a base de datos:
+Rationale: argon2 is memory-hard and needs no configuration; PyJWT is the smallest well-known JWT library and keeps signing and verification in one module. The password hash is never serialized into any response model, and the login check is `verify(hash, submitted_password)`.
 
-- `SLOT_MINUTES = 30`, `OPEN_TIME = 09:00`, `LAST_START = 17:30` (de modo que el turno termina a más tardar a las `18:00`), días válidos de lunes (0) a sábado (5).
-- `validate_slot(start_at, now)` devuelve el primer error encontrado o `None`, y evalúa **en UTC**: fuera de día (domingo) → `422`; hora de inicio anterior a `09:00` o posterior a `17:30` → `422`; minutos distintos de `00`/`30` → `422`; instante no posterior a `now` → `422`.
-- `overlaps(a_start, a_end, b_start, b_end)` compara intervalos `[start, end)` para detectar choques reales y no solo coincidencias exactas de `start_at`.
+Alternatives considered: `passlib` with bcrypt (rejected: `passlib` 1.7.4 against bcrypt 4.x emits a deprecation warning on every hash); unsalted SHA-256 (rejected: fast hashes are not password storage); opaque server-side sessions (rejected: the request asks for a JWT).
 
-La validación por parseo (ISO 8601) la hace Pydantic en el modelo de entrada y produce `422` de forma nativa antes de entrar al handler. La falta de zona horaria se interpreta como UTC y los desplazamientos se normalizan a UTC, tal y como fija la spec.
+### 5. Authorization is expressed as dependencies, errors as explicit status codes
 
-**Orden de comprobaciones en `POST /appointments`** (determinista y documentado para los tests): `401` (sin token) → `403` (rol) → `404` (mascota inexistente) → `403` (mascota ajena) → `404` (veterinario inexistente) → `422` (reglas de agenda) → `409` (conflicto de horario) → `201`.
+`app/dependencies.py` exposes `get_current_user` (parses the bearer token, resolves the user, raises 401) and `require_client` (calls `get_current_user` and raises 403 when the role is `vet`). Routers use `require_client` on `POST /pets` and `POST /appointments`; ownership rules compare the pet's `owner_id` with the authenticated user id and raise 403; the appointment cancel endpoint accepts either the owning client or the appointment's veterinarian and raises 403 otherwise.
 
-### 6. Formato de respuestas y errores
+Rationale: role and ownership checks are then written once, and every rejection carries the exact status code the specs require. Domain errors are raised as `HTTPException` with explicit codes (401, 403, 404, 409, 422) instead of being derived from exception handlers, because the requested status codes are part of the contract.
 
-Los cuerpos de éxito usan exactamente las claves pedidas: `{id, email, role}`, `{access_token, token_type}`, `[{id, email}]`, `{id, name, species, birth_date, owner_id}`, `{id, pet_id, vet_id, start_at, end_at, status}`.
+Alternative considered: a global exception handler that maps domain exceptions to status codes. Rejected because the mapping would live away from the rule that produced it.
 
-Los errores usan `HTTPException`, por lo que el cuerpo es `{"detail": "..."}`; los errores de validación de Pydantic conservan su lista de detalle habitual con código `422`. `start_at` y `end_at` se serializan en ISO 8601 con desplazamiento UTC (`2027-03-01T09:00:00+00:00`), y `birth_date` como `YYYY-MM-DD`.
+### 6. Validation lives in the Pydantic schemas, scheduling rules in the service layer
 
-### 7. Base de datos de pruebas
+`app/schemas.py` declares the request models: `role` is `Literal["client", "vet"]`, `species` is `Literal["dog", "cat", "other"]`, `password` has a minimum length of 8, and `birth_date` is a `date` with a field validator that rejects a date after today. The response models pin the exact JSON keys (`id`, `email`, `role`; `id`, `name`, `species`, `birth_date`, `owner_id`; `id`, `pet_id`, `vet_id`, `start_at`, `end_at`, `status`).
 
-`tests/conftest.py` crea la base `vetclinic_test` a partir de `TEST_DATABASE_URL` (apuntando al mismo servidor PostgreSQL que la aplicación), aplica el esquema con `Base.metadata.create_all` y, entre pruebas, hace `TRUNCATE` de `appointments`, `pets` y `users` y reinicia la secuencia de ids. Se usa PostgreSQL real (no SQLite) porque las specs mencionan índices parciales, `TIMESTAMPTZ` y `IntegrityError` por email duplicado, y SQLite no reproduce esos comportamientos.
+The appointment rules that need the database (pet exists, pet owned by the caller, veterinarian exists, slot free) and the rules that need the clock (past check) live in `app/routers/appointments.py` next to the endpoint, because they need the session and the current time. Pure calendar rules (minute in `{0, 30}`, second is zero, weekday Monday to Saturday, start between 09:00 and 17:30 UTC) are expressed as a small helper in the same module.
 
-Las pruebas usan `fastapi.testclient.TestClient`, que ejercita la aplicación completa (routing, dependencias, validaciones y base de datos) sin necesidad de levantar un servidor.
+Alternative considered: putting the slot rules into `app/schemas.py` as a Pydantic validator. Rejected for the past-date rule, because "now" inside a schema validator is hidden from the reader; keeping all scheduling rules in one module makes the calendar rules auditable in one place.
 
-### 8. Containerización
+### 7. One time representation: aware UTC everywhere, `UtcDateTime` at the column
 
-`/Dockerfile` (stage único sobre `python:3.12-slim`): instala `requirements.txt`, copia `app/`, crea un usuario no root, y su `CMD` ejecuta `uvicorn app.main:app --host 0.0.0.0 --port 8000`.
+`app/models.py` stores appointment instants in columns wrapped in a `UtcDateTime` type decorator: it converts an aware datetime to UTC and stores it naive, and re-attaches `tzinfo=UTC` when reading. Every comparison (grid, window, past, conflict) is done on aware UTC values, and the API always renders instants as UTC ISO 8601 with a `Z` suffix.
 
-`/docker-compose.yml` define tres servicios:
+Rationale: SQLite does not keep timezone information, so a bare `DateTime(timezone=True)` column would return naive values in the test environment and aware values in PostgreSQL. The decorator makes both environments behave the same, which is what lets the suite assert on instants without special cases.
 
-- `db`: `postgres:16`, con `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB=vetclinic`, volumen nombrado `pgdata` y `healthcheck` con `pg_isready`.
-- `api`: construye desde el `Dockerfile`, depende de `db` ya saludable, expone `8000:8000` y recibe `DATABASE_URL`, `JWT_SECRET` y `JWT_ALGORITHM` por variables de entorno.
-- `tests`: construye la misma imagen, depende de `db` ya saludable, y ejecuta `pytest -q`; comparte la red con `db`.
+A `start_at` without an explicit offset is read as UTC, and a `start_at` with an explicit offset is converted to UTC before the rules are applied.
 
-La verificación final es `docker compose up --build --abort-on-container-exit --exit-code-from tests`, que termina con código `0` cuando la suite pasa dentro del contenedor, más una comprobación funcional de `GET /health` sobre el servicio `api` levantado.
+Alternative considered: storing the instant as an ISO 8601 string. Rejected because it loses ordering and range semantics in SQL.
 
-El puerto publicado es `8000` (no se usa `8202`).
+### 8. Slot conflicts are detected by a query inside the booking transaction
 
-### 9. README
+Before inserting an appointment, `app/routers/appointments.py` queries the appointments of the requested veterinarian that start at the same instant and are not `cancelled`; if one exists it raises 409. Cancelled rows are therefore ignored, which is exactly the "a cancelled slot is free again" rule.
 
-`/README.md` documenta: requisitos, arranque con `docker compose up --build`, variables de entorno, cómo ejecutar los tests (`docker compose run --rm tests` y `pytest` local), el catálogo de endpoints y ejemplos `curl` para cada uno: registro, login, listado de veterinarios, alta y listado de mascotas, creación, listado y cancelación de turnos.
+Alternative considered: a unique index on `(vet_id, start_at)`. Rejected because it would also forbid re-booking a cancelled slot, and because a partial unique index (`WHERE status <> 'cancelled'`) is not portable to the SQLite engine the test suite uses.
+
+### 9. The container setup is a root Dockerfile plus a root compose file
+
+`Dockerfile` uses a `python:3.11-slim` base, installs `requirements.txt`, copies `app/`, and starts `uvicorn app.main:app --host 0.0.0.0 --port 8000` as its default command. `docker-compose.yml` defines two services: `api`, built from the root `Dockerfile` with the database URL injected as `DATABASE_URL`, depending on `db`; and `db`, a `postgres:16-alpine` service with a named volume for its data directory. `.dockerignore` keeps `.venv`, `__pycache__`, `tests` and local caches out of the build context.
+
+Rationale: the two files at the root are the ones a team member expects, and the compose file is the only place where the PostgreSQL credentials live.
+
+Alternative considered: running the API on the host and only the database in a container. Rejected: the request is for a project that builds and runs containerized.
+
+### 10. The test suite runs on an embedded database with no Docker
+
+`tests/conftest.py` builds the application with `DATABASE_URL` pointed at an in-memory SQLite database, creates the schema once per test session, gives each test a clean set of tables, and provides helpers that register a client, register a veterinarian, log in and obtain a bearer header. The endpoints are exercised through FastAPI's `TestClient`, and the appointment tests use instants built relative to the current date so they do not rot.
+
+Alternative considered: running the suite against the PostgreSQL service of the compose file. Rejected because it would require a Docker daemon in the delivery environment; the same suite can still be pointed at PostgreSQL by exporting `DATABASE_URL` before running `pytest`.
 
 ## Risks / Trade-offs
 
-- **La API y la base de datos comparten la imagen y la suite corre contra el servicio `db` de Compose** → si el `db` no está listo, la suite falla al conectar. Mitigación: `healthcheck` con `pg_isready` y `depends_on: condition: service_healthy`.
-- **El email duplicado depende de una carrera entre el `SELECT` previo y el `INSERT`** → mitigación: índice `UNIQUE` en `users.email` y captura de `IntegrityError` que traduce a `409`.
-- **No hay migraciones (Alembic)** → un cambio de esquema futuro requeriría recrear la base. Mitigación aceptada para la entrega inicial; se documenta en el README y se sugiere `create_all` idempotente en el arranque.
-- **`JWT_SECRET` con valor por defecto** solo dentro de Compose → riesgo si se despliega así en producción. Mitigación: el valor por defecto es exclusivo del entorno local y el README indica generar uno propio; en producción la variable es obligatoria.
-- **El índice único parcial cubre el mismo `start_at` pero no solapamientos parciales** → mitigación: la comprobación de solapamiento en `app/services/scheduling.py` se ejecuta siempre antes del `INSERT`.
-- **La hora del servidor se usa para validar "no está en el pasado"** → un reloj desfasado rechazaría turnos válidos. Mitigación: se usa `datetime.now(timezone.utc)` de forma consistente en toda la API y el README documenta el requisito de NTP.
-- **`JWT_EXPIRE_MINUTES` corto** → un token caduca durante una sesión de trabajo. Mitigación: valor por defecto de 60 minutos y variable configurable por entorno.
+- [The test database is not PostgreSQL] → the models, queries and constraints are kept portable, and the UTC handling is centralised in `UtcDateTime` so both engines behave identically; the team can re-run the suite against PostgreSQL by setting `DATABASE_URL`.
+- [Two clients can book the same slot at the same instant] → the conflict check and the insert run inside one transaction, and a database level guarantee (a filtered unique index) is the documented follow-up when the API is exposed beyond the internal team.
+- [A client sends a local time without an offset] → the API reads such a value as UTC and rejects the ones that fall outside the working window with 422; the README documents that `start_at` must be UTC ISO 8601.
+- [The container files cannot be built in the delivery environment] → `Dockerfile` and `docker-compose.yml` are verified statically (the compose file parses as YAML, every copied path exists in the repository, the service wiring and the `DATABASE_URL` point at each other), and the team builds them where a Docker daemon is available.
+- [The JWT secret has a development default] → `app/config.py` reads `JWT_SECRET` from the environment and `docker-compose.yml` sets it, so the delivered containers never rely on the default.
 
 ## Migration Plan
 
-No hay migración de datos: es la primera entrega y no existe un sistema previo que migrar. El orden de despliegue es `docker compose up --build`, que crea la base vacía y el esquema en el arranque del servicio `api`. Para revertir basta con `docker compose down -v`, que descarta el volumen de PostgreSQL.
+Greenfield delivery, so there is no data to migrate and no rollback to plan beyond removing the containers and the volume. The order of deployment is: build the image, start `db`, start `api`, then confirm `GET /health` answers `200 {"status": "ok"}` and that the first registration can be created and logged into.
 
 ## Open Questions
 
-Ninguna. Todas las decisiones que afectan a las specs, al enfoque y al desglose de tareas están resueltas en este documento.
+- The default access token lifetime (`ACCESS_TOKEN_EXPIRE_MINUTES`) is a value the clinic can tune later; it does not change any behavior stated in `specs/`.
+- Whether to add Alembic migrations and a filtered unique index for slot exclusivity is deferred until a first change alters the schema or the API leaves the internal team.

@@ -1,45 +1,38 @@
-"""Motor, sesión y base declarativa de SQLAlchemy."""
+"""Motor de base de datos, fábrica de sesiones y dependencia de sesión."""
 
-from collections.abc import Generator
+from collections.abc import Iterator
 
 from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
-from app.config import settings
-
-engine = create_engine(
-    settings.DATABASE_URL,
-    pool_pre_ping=True,
-    pool_size=5,
-    max_overflow=10,
-)
-
-SessionLocal = sessionmaker(
-    bind=engine,
-    autoflush=False,
-    autocommit=False,
-    expire_on_commit=False,
-)
+from app.config import get_settings
 
 
 class Base(DeclarativeBase):
-    """Base declarativa que agrupa los metadatos de todas las tablas."""
+    """Base declarativa común a todas las tablas del proyecto."""
 
 
-def get_db() -> Generator[Session, None, None]:
-    """Entrega una sesión de base de datos por petición y la cierra al terminar."""
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+def _engine_options(url: str) -> dict:
+    """Ajusta las opciones del motor según el backend de la URL."""
+    options: dict = {"pool_pre_ping": True}
+    if url.startswith("sqlite"):
+        options["connect_args"] = {"check_same_thread": False}
+        if ":memory:" in url or url in ("sqlite://", "sqlite:///"):
+            # Una base en memoria solo existe mientras vive su conexión: se reutiliza una sola.
+            options["poolclass"] = StaticPool
+    return options
 
 
-def init_db() -> None:
-    """Crea el esquema en la base configurada si todavía no existe.
+settings = get_settings()
+engine: Engine = create_engine(
+    settings.database_url, **_engine_options(settings.database_url)
+)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
-    La operación es idempotente: solo crea las tablas e índices ausentes.
-    """
-    from app import models
 
-    models.Base.metadata.create_all(bind=engine)
+def get_db() -> Iterator[Session]:
+    """Entrega una sesión por petición y la cierra al terminar."""
+    with SessionLocal() as session:
+        yield session

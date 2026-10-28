@@ -1,59 +1,56 @@
-"""Hash de contraseñas y emisión y decodificación de tokens JWT.
-
-Las contraseñas se guardan con Argon2 y sal aleatoria por usuario: el material
-original nunca se almacena ni se devuelve. Los tokens son JWT firmados con el
-algoritmo y el secreto configurados en el entorno, y llevan los claims `sub`
-(id del usuario), `role`, `iat` (emisión) y `exp` (caducidad).
-"""
+"""Hasheo de contraseñas y emisión y verificación de tokens JWT."""
 
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import jwt
-from pwdlib import PasswordHash
-from pwdlib.hashers.argon2 import Argon2Hasher
+from argon2 import PasswordHasher
+from argon2.exceptions import InvalidHashError, VerificationError
 
-from app.config import settings
+from app.config import get_settings
 
-# Argon2 con sal aleatoria en cada hash: dos contraseñas iguales nunca coinciden.
-hashador = PasswordHash((Argon2Hasher(),))
+ALGORITHM = "HS256"
 
-# Claims que todo token emitido por la API debe incluir.
-CLAIMS_REQUERIDOS = ("sub", "role", "iat", "exp")
+_password_hasher = PasswordHasher()
 
 
-def hashear_password(password: str) -> str:
-    """Devuelve el hash Argon2 con sal aleatoria de una contraseña en claro."""
-    return hashador.hash(password)
+def hash_password(password: str) -> str:
+    """Devuelve el hash argon2 de la contraseña, con sal propia."""
+    return _password_hasher.hash(password)
 
 
-def verificar_password(password: str, password_hash: str) -> bool:
-    """Indica si una contraseña en claro corresponde al hash almacenado."""
-    return hashador.verify(password, password_hash)
+def verify_password(password: str, hashed_password: str) -> bool:
+    """Indica si la contraseña corresponde al hash almacenado."""
+    try:
+        return _password_hasher.verify(hashed_password, password)
+    except (VerificationError, InvalidHashError):
+        return False
 
 
-def emitir_token(usuario_id: int, rol: str) -> str:
-    """Emite un JWT firmado con los claims `sub`, `role`, `iat` y `exp`."""
-    ahora = datetime.now(timezone.utc)
-    payload = {
-        "sub": str(usuario_id),
-        "role": rol,
-        "iat": int(ahora.timestamp()),
-        "exp": int((ahora + timedelta(minutes=settings.JWT_EXPIRE_MINUTES)).timestamp()),
-    }
-    return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
-
-
-def decodificar_token(token: str) -> dict[str, Any]:
-    """Decodifica y valida un JWT emitido por la API.
-
-    Lanza `jwt.InvalidTokenError` (o `jwt.ExpiredSignatureError`) si el token
-    está mal formado, tiene una firma inválida, ha expirado o le falta alguno de
-    los claims obligatorios.
-    """
-    return jwt.decode(
-        token,
-        settings.JWT_SECRET,
-        algorithms=[settings.JWT_ALGORITHM],
-        options={"require": list(CLAIMS_REQUERIDOS)},
+def create_access_token(
+    user_id: int, role: str, expires_minutes: int | None = None
+) -> str:
+    """Emite un JWT firmado con el identificador y el rol de la cuenta."""
+    settings = get_settings()
+    minutes = (
+        settings.access_token_expire_minutes
+        if expires_minutes is None
+        else expires_minutes
     )
+    issued_at = datetime.now(timezone.utc)
+    payload: dict[str, Any] = {
+        "sub": str(user_id),
+        "role": role,
+        "iat": issued_at,
+        "exp": issued_at + timedelta(minutes=minutes),
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm=ALGORITHM)
+
+
+def decode_access_token(token: str) -> dict[str, Any]:
+    """Verifica la firma y la expiración del token y devuelve su contenido.
+
+    Lanza ``jwt.InvalidTokenError`` cuando el token no es válido.
+    """
+    settings = get_settings()
+    return jwt.decode(token, settings.jwt_secret, algorithms=[ALGORITHM])

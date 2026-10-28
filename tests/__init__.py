@@ -1,1 +1,1 @@
-"""Paquete de pruebas de la API de la clínica veterinaria."""
+"""Suite de pruebas de la API de la clínica veterinaria."""

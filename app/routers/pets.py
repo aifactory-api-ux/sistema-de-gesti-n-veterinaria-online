@@ -1,6 +1,4 @@
-"""Endpoints de alta y listado de las mascotas del cliente autenticado."""
-
-from typing import Annotated
+"""Registro de las mascotas de la clínica."""
 
 from fastapi import APIRouter, Depends, status
 from sqlalchemy import select
@@ -9,58 +7,38 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.dependencies import get_current_user, require_client
 from app.models import Pet, User
-from app.schemas import PetCreate, PetPublic
+from app.schemas import PetCreate, PetResponse
 
-router = APIRouter(tags=["mascotas"])
+router = APIRouter(prefix="/pets", tags=["pets"])
 
 
-@router.post(
-    "/pets",
-    response_model=PetPublic,
-    status_code=status.HTTP_201_CREATED,
-    summary="Registra una mascota a nombre del cliente autenticado",
-)
-def registrar_mascota(
-    datos: PetCreate,
-    db: Annotated[Session, Depends(get_db)],
-    usuario: Annotated[User, Depends(require_client)],
+@router.post("", response_model=PetResponse, status_code=status.HTTP_201_CREATED)
+def create_pet(
+    payload: PetCreate,
+    owner: User = Depends(require_client),
+    db: Session = Depends(get_db),
 ) -> Pet:
-    """Crea una mascota del cliente autenticado y devuelve sus datos.
-
-    El propietario se toma siempre del token: un cliente no puede registrar
-    una mascota a nombre de otro. La dependencia `require_client` responde
-    `403` cuando el portador del token tiene rol `vet`, y la validación del
-    cuerpo produce `422` ante una especie no admitida o una fecha de
-    nacimiento futura.
-    """
-    mascota = Pet(
-        name=datos.name,
-        species=datos.species,
-        birth_date=datos.birth_date,
-        owner_id=usuario.id,
+    """Registra una mascota a nombre del cliente autenticado."""
+    pet = Pet(
+        name=payload.name,
+        species=payload.species,
+        birth_date=payload.birth_date,
+        owner_id=owner.id,
     )
-    db.add(mascota)
+    db.add(pet)
     db.commit()
-    db.refresh(mascota)
+    db.refresh(pet)
+    return pet
 
-    return mascota
 
-
-@router.get(
-    "/pets",
-    response_model=list[PetPublic],
-    summary="Lista las mascotas del usuario autenticado",
-)
-def listar_mascotas(
-    db: Annotated[Session, Depends(get_db)],
-    usuario: Annotated[User, Depends(get_current_user)],
+@router.get("", response_model=list[PetResponse])
+def list_pets(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> list[Pet]:
-    """Devuelve únicamente las mascotas cuyo propietario es el usuario autenticado.
-
-    La dependencia `get_current_user` exige un token Bearer válido, de modo que
-    sin cabecera o con un token inválido la API responde `401` antes de llegar
-    al manejador.
-    """
+    """Devuelve las mascotas cuyo propietario es la cuenta autenticada."""
     return list(
-        db.scalars(select(Pet).where(Pet.owner_id == usuario.id).order_by(Pet.id)).all()
+        db.scalars(
+            select(Pet).where(Pet.owner_id == current_user.id).order_by(Pet.id)
+        )
     )

@@ -1,1 +1,1 @@
-"""API de gestión de la clínica veterinaria."""
+"""Backend de la clínica veterinaria."""
